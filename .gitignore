@@ -1,0 +1,43 @@
+# Gradle, Kotlin and Android build outputs
+.gradle/
+.kotlin/
+**/build/
+.cxx/
+.externalNativeBuild/
+captures/
+*.apk
+*.aab
+*.apks
+*.apkm
+*.hprof
+hs_err_pid*
+replay_pid*
+
+# Machine-specific SDKs and configuration
+/.tools/
+local.properties
+*.jks
+*.keystore
+keystore.properties
+.env
+.env.*
+!.env.example
+
+# IDE and operating-system files
+.idea/
+*.iml
+.vscode/
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Scratch files and generated verification artifacts
+/tmp/
+/inspection/
+__pycache__/
+*.py[cod]
+/reports/**/*
+!/reports/**/
+!/reports/**/*.md
+
+# Source assets, Room schemas and the Gradle wrapper remain eligible for Git.

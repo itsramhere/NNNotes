@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 200" width="100%" height="100%">
+  <defs>
+    <!-- Barrel Gradient -->
+    <linearGradient id="bpBarrel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#4a90e2" />
+      <stop offset="35%" stop-color="#2a75d3" />
+      <stop offset="70%" stop-color="#185abd" />
+      <stop offset="100%" stop-color="#0e3a80" />
+    </linearGradient>
+
+    <!-- Metallic Gradients -->
+    <linearGradient id="bpMetal" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f2f5f8" />
+      <stop offset="25%" stop-color="#c9d2db" />
+      <stop offset="50%" stop-color="#ffffff" />
+      <stop offset="75%" stop-color="#9aa5b1" />
+      <stop offset="100%" stop-color="#616e7c" />
+    </linearGradient>
+
+    <!-- Rubber Grip Gradient -->
+    <linearGradient id="bpGrip" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#2b3b4e" />
+      <stop offset="40%" stop-color="#1e293b" />
+      <stop offset="80%" stop-color="#0f172a" />
+      <stop offset="100%" stop-color="#090d16" />
+    </linearGradient>
+
+    <!-- Soft Drop Shadow -->
+    <filter id="bpShadow" x="-10%" y="-30%" width="120%" height="180%">
+      <feDropShadow dx="3" dy="10" stdDeviation="7" flood-color="#0f172a" flood-opacity="0.25" />
+    </filter>
+  </defs>
+
+  <g filter="url(#bpShadow)">
+    <!-- Push Clicker Button -->
+    <path d="M 445 92.5 L 468 92.5 C 471 92.5 473 95 473 100 C 473 105 471 107.5 468 107.5 L 445 107.5 Z" fill="url(#bpMetal)" stroke="#52606d" stroke-width="1.5" />
+    <!-- Retractor Collar Ring -->
+    <rect x="437" y="90" width="9" height="20" rx="1.5" fill="url(#bpMetal)" stroke="#52606d" stroke-width="1.5" />
+
+    <!-- Main Pen Barrel -->
+    <path d="M 230 89 L 438 89 C 440 89 441 90.5 441 92.5 L 441 107.5 C 441 109.5 440 111 438 111 L 230 111 Z" fill="url(#bpBarrel)" />
+    <!-- Barrel Specular Highlight -->
+    <path d="M 230 92 L 436 92 C 438 92 439 93 439 94 L 439 96 C 439 95 438 94 436 94 L 230 94 Z" fill="#ffffff" opacity="0.45" />
+
+    <!-- Rubber Ergonomic Grip -->
+    <path d="M 125 88 L 230 89 L 230 111 L 125 112 C 117 107 117 93 125 88 Z" fill="url(#bpGrip)" />
+    <!-- Grip Traction Grooves -->
+    <g stroke="#3b4858" stroke-width="2.5" stroke-linecap="round" opacity="0.8">
+      <line x1="145" y1="91" x2="145" y2="109" />
+      <line x1="160" y1="90" x2="160" y2="110" />
+      <line x1="175" y1="89.5" x2="175" y2="110.5" />
+      <line x1="190" y1="89.5" x2="190" y2="110.5" />
+      <line x1="205" y1="89" x2="205" y2="111" />
+    </g>
+
+    <!-- Metal Pocket Clip -->
+    <path d="M 432 90 L 350 86 C 344 86 342 90 345 92.5 C 347 94 351 92 355 90 L 432 92 Z" fill="url(#bpMetal)" stroke="#7b8794" stroke-width="0.8" />
+    <circle cx="344.5" cy="90" r="3" fill="url(#bpMetal)" />
+
+    <!-- Metal Tapered Nose Cone -->
+    <path d="M 125 88 L 65 96 C 62 96.5 60 97.5 60 100 C 60 102.5 62 103.5 65 104 L 125 112 Z" fill="url(#bpMetal)" stroke="#7b8794" stroke-width="1" />
+
+    <!-- Tungsten Tip & Ball -->
+    <rect x="52" y="98.5" width="8" height="3" fill="#cbd2d9" stroke="#616e7c" stroke-width="0.8" />
+    <circle cx="51.5" cy="100" r="1.6" fill="#1e293b" />
+  </g>
+</svg>
