@@ -23,7 +23,7 @@ interface NotebookDao {
         """
         SELECT notebooks.id, notebooks.title, notebooks.folder_id AS folderId,
                folders.name AS folderName, notebooks.updated_at AS updatedAt,
-               notebooks.trashed_at AS trashedAt
+               notebooks.trashed_at AS trashedAt, notebooks.notebook_type AS notebookType
         FROM notebooks
         LEFT JOIN folders ON notebooks.folder_id = folders.id
         WHERE notebooks.is_trashed = :trashed

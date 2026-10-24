@@ -65,8 +65,7 @@ class Phase4UiTest {
                 compose.onNodeWithText(text).performScrollTo().performClick()
             }
             else -> {
-                compose.onNodeWithContentDescription("Content editing").performScrollToNode(hasText(text))
-                compose.onNodeWithText(text).performClick()
+                compose.onNodeWithContentDescription(text).performScrollTo().performClick()
             }
         }
         compose.waitForIdle()
@@ -84,6 +83,7 @@ class Phase4UiTest {
         open(true);val original=objects().associate {it.id to it.payload}
         contentClick("Lasso")
         compose.onNodeWithText("Lasso").assertIsSelected()
+        compose.onNodeWithContentDescription("Settings").performScrollTo().performClick()
         compose.onNodeWithText("Fit page").performScrollTo().performClick()
         saved(); compose.waitForIdle()
         compose.activityRule.scenario.onActivity {activity->

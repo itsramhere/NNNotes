@@ -39,6 +39,8 @@ internal class InkCanvasView(context: Context) : FrameLayout(context) {
     private val inProgressView = InProgressStrokesView(context, null, 0)
     private val selectionOverlay = SelectionOverlay(context)
     private var contentObjects: List<ContentObject> = emptyList()
+    private var contentEntities: List<EditableObjectEntity>? = null
+    private var storedRecords: List<InkStrokeRecord>? = null
     private var selectionNavigation = false
     private var selectionPending = 0
     private val completed = LinkedHashMap<String, DecodedInkStroke>()
@@ -58,6 +60,9 @@ internal class InkCanvasView(context: Context) : FrameLayout(context) {
     private var paperBackground = "blank"
     private var pageWidth = 595f
     private var pageHeight = 842f
+    private var paperSpacingMm = 7f
+    private var paperPatternWeight = "normal"
+    private var paperBackgroundColor = android.graphics.Color.WHITE
     private var pdfSourcePath: String? = null
     private var pdfPage: com.ramst.notein.storage.PageEntity? = null
     private var activePointerId = MotionEvent.INVALID_POINTER_ID
@@ -78,6 +83,7 @@ internal class InkCanvasView(context: Context) : FrameLayout(context) {
     var onStrokeErased: ((InkStrokeRecord) -> Unit)? = null
     var onViewportChanged: ((Float, Float, Float) -> Unit)? = null
     var onPendingInkChanged: ((Int) -> Unit)? = null
+    var currentPageStrokes: ((String) -> List<InkStrokeRecord>)? = null
     var inputEnabled = true
     private var viewportLocked = false
     private var pageLayout = PageLayout.HORIZONTAL
@@ -91,9 +97,10 @@ internal class InkCanvasView(context: Context) : FrameLayout(context) {
     private var panScaled = false
 
     fun setPageNavigation(layout: PageLayout, neighbors: List<PageNeighbor>, onNavigate: (Int) -> Unit) {
+        onPageNavigate = onNavigate
+        if (pageLayout == layout && pageNeighbors == neighbors) return
         if (pageLayout != layout) cancelPan()
         pageLayout = layout
-        onPageNavigate = onNavigate
         pageNeighbors = neighbors
         val ids = neighbors.map { it.page.id }.toSet()
         neighborViews.keys.filter { it !in ids }.forEach { id -> neighborViews.remove(id)?.let { removeView(it) } }
@@ -174,7 +181,7 @@ internal class InkCanvasView(context: Context) : FrameLayout(context) {
                     val active = activeStrokes.remove(strokeId) ?: return@forEach
                     val record = active.finishedRecord ?: return@forEach
                     if (record.id in desiredIds && record.id !in eraserPreview) {
-                        record.decode()?.let { completed[record.id] = it }
+                        active.finishedBounds?.let { completed[record.id] = DecodedInkStroke(record, stroke, it) }
                     }
                     InkTrace.log("stroke finished id=${record.id} inputs=${stroke.inputs.size}")
                 }
@@ -210,15 +217,25 @@ internal class InkCanvasView(context: Context) : FrameLayout(context) {
     override fun performClick(): Boolean { super.performClick(); return true }
 
     fun setPageId(pageId: String) {
-        if (currentPageId != pageId) { selectionOverlay.cancelGesture(); pageSwipeOffset = 0f }
+        if (currentPageId != pageId) {
+            selectionOverlay.cancelGesture(); pageSwipeOffset = 0f
+            storedRecords = null
+        }
         currentPageId = pageId
     }
 
     fun setContentObjects(objects: List<EditableObjectEntity>, selectedIds: Set<String>, lassoEnabled: Boolean,
         onLasso: (List<PointF>) -> Unit, onTransform: (Float, Float, Float) -> Unit,
         onSelect: (String?) -> Unit, onEditText: (String) -> Unit, onError: (String) -> Unit) {
-        contentObjects = objects.mapNotNull { it.toContentObject() }
-        lastStrokeTime = maxOf(lastStrokeTime, objects.maxOfOrNull { it.createdAt } ?: 0L)
+        val contentChanged = contentEntities != objects
+        if (contentChanged) {
+            val cached = contentObjects.associateBy { it.entity.id }
+            contentObjects = objects.mapNotNull { entity ->
+                cached[entity.id]?.takeIf { it.entity == entity } ?: entity.toContentObject()
+            }
+            contentEntities = objects
+            lastStrokeTime = maxOf(lastStrokeTime, objects.maxOfOrNull { it.createdAt } ?: 0L)
+        }
         selectionOverlay.objects = objects
         selectionOverlay.selectedIds = selectedIds
         if (selectionOverlay.selectionEnabled != lassoEnabled) selectionOverlay.cancelGesture()
@@ -229,8 +246,10 @@ internal class InkCanvasView(context: Context) : FrameLayout(context) {
         selectionOverlay.onEditText = onEditText
         selectionOverlay.onPending = { selectionPending = it; publishPendingInk() }
         completedView.onContentError = onError
-        completedView.setContent(contentObjects.filter { it.entity.type != INK_STROKE_TYPE })
-        renderCompleted()
+        if (contentChanged) {
+            completedView.setContent(contentObjects.filter { it.entity.type != INK_STROKE_TYPE })
+        }
+        selectionOverlay.invalidate()
     }
 
     fun setEditorState(activeTool: InkTool, brushColor: Int, brushSize: Float,
@@ -243,21 +262,29 @@ internal class InkCanvasView(context: Context) : FrameLayout(context) {
         if (activePointerId == MotionEvent.INVALID_POINTER_ID &&
             eraserPointerId == MotionEvent.INVALID_POINTER_ID &&
             fingerPointerId == MotionEvent.INVALID_POINTER_ID) {
+            val scale = newViewportScale.coerceIn(0.000001f, 6f)
+            if (viewportX == newViewportX && viewportY == newViewportY && viewportScale == scale) return
             viewportX = newViewportX
             viewportY = newViewportY
-            viewportScale = newViewportScale.coerceIn(0.000001f, 6f)
+            viewportScale = scale
+            renderCompleted()
         }
-        renderCompleted()
     }
 
     fun setDocument(isInfinite: Boolean, background: String, width: Float, height: Float, spacingMm: Float = 7f,
         patternWeight: String = "normal", backgroundColor: Int = android.graphics.Color.WHITE) {
+        if (documentConfigured && infiniteCanvas == isInfinite && paperBackground == background &&
+            pageWidth == width && pageHeight == height && paperSpacingMm == spacingMm &&
+            paperPatternWeight == patternWeight && paperBackgroundColor == backgroundColor) return
         infiniteCanvas = isInfinite
         documentConfigured = true
         setBackgroundColor(if (isInfinite) android.graphics.Color.WHITE else 0xFFE5E7EB.toInt())
         paperBackground = background
         pageWidth = width
         pageHeight = height
+        paperSpacingMm = spacingMm
+        paperPatternWeight = patternWeight
+        paperBackgroundColor = backgroundColor
         completedView.setPaperTemplate(spacingMm, patternWeight, backgroundColor)
         renderCompleted()
     }
@@ -314,14 +341,20 @@ internal class InkCanvasView(context: Context) : FrameLayout(context) {
     }
 
     /** Receives the ViewModel's desired state, not a stale database emission. */
-    fun setStoredStrokes(records: List<InkStrokeRecord>) {
+    fun setStoredStrokes(requestedRecords: List<InkStrokeRecord>) {
+        // Compose can apply a frame prepared before the most recent pointer-up or undo.
+        // Read the session's current state at application time when hosted by the editor.
+        val records = currentPageId?.let { currentPageStrokes?.invoke(it) } ?: requestedRecords
+        if (storedRecords == records) return
+        storedRecords = records
         val incoming = records.associateBy { it.id }
         desiredIds.clear()
         desiredIds += incoming.keys
         completed.keys.retainAll(incoming.keys - eraserPreview.keys)
-        records.forEach { record ->
+        val waitingIds = activeStrokes.values.mapTo(mutableSetOf()) { it.recordId }
+        incoming.values.forEach { record ->
             lastStrokeTime = maxOf(lastStrokeTime, record.createdAt)
-            val waitingForHandoff = activeStrokes.values.any { it.recordId == record.id }
+            val waitingForHandoff = record.id in waitingIds
             if (!waitingForHandoff && record.id !in eraserPreview && completed[record.id]?.record != record) {
                 record.decode()?.let { completed[record.id] = it }
             }
@@ -329,7 +362,9 @@ internal class InkCanvasView(context: Context) : FrameLayout(context) {
         renderCompleted()
     }
 
-    fun removeStroke(recordId: String) { desiredIds.remove(recordId); completed.remove(recordId); renderCompleted() }
+    fun removeStroke(recordId: String) {
+        desiredIds.remove(recordId); completed.remove(recordId); renderCompleted()
+    }
     fun restoreStroke(record: InkStrokeRecord) {
         desiredIds += record.id
         record.decode()?.let { completed[record.id] = it; renderCompleted() }
@@ -354,8 +389,7 @@ internal class InkCanvasView(context: Context) : FrameLayout(context) {
             viewportX = x
             viewportY = y
         }
-        completedView.setStrokes(completed.values.sortedWith(
-            compareBy<DecodedInkStroke> { it.record.createdAt }.thenBy { it.record.id }),
+        completedView.setStrokes(completed.values.toList(),
             viewportX, viewportY, viewportScale, infiniteCanvas, paperBackground, pageWidth, pageHeight)
         selectionOverlay.viewportX = viewportX
         selectionOverlay.viewportY = viewportY
@@ -443,7 +477,9 @@ internal class InkCanvasView(context: Context) : FrameLayout(context) {
                 when {
                     activeIndex >= 0 -> {
                         activeStrokeId?.let { activeStrokes[it]?.append(event, activeIndex) }
-                        withAuthoringEvent(event) { inProgressView.addToStroke(it, activePointerId, null) }
+                        activeStrokeId?.let { strokeId ->
+                            withAuthoringEvent(event) { inProgressView.addToStroke(it, activePointerId, strokeId, null) }
+                        }
                     }
                     eraserIndex >= 0 -> {
                         // Include historical samples and the swept path, not just the last event.
@@ -488,15 +524,21 @@ internal class InkCanvasView(context: Context) : FrameLayout(context) {
                 if (pointerId == activePointerId) {
                     val active = activeStrokes[activeStrokeId]
                     active?.append(event, index)
-                    withAuthoringEvent(event) { inProgressView.finishStroke(it, activePointerId) }
                     // Store completed edits on UP, independently of the delayed wet/dry render handoff.
                     active?.let {
-                        val record = strokeRecordFrom(it.recordId, it.pageId, Stroke(it.brush, it.inputs),
+                        val record = strokeRecordFromInputs(it.recordId, it.pageId, it.inputs,
                             it.tool, it.color, it.size, it.createdAt)
                         it.finishedRecord = record
+                        val json = org.json.JSONObject(record.payload)
+                        it.finishedBounds = InkBounds(
+                            json.getDouble("left").toFloat(), json.getDouble("top").toFloat(),
+                            json.getDouble("right").toFloat(), json.getDouble("bottom").toFloat())
                         desiredIds += record.id
                         onStrokeCommitted?.invoke(record)
                         InkTrace.log("stroke completed id=${record.id} inputs=${it.inputs.size}")
+                    }
+                    activeStrokeId?.let { strokeId ->
+                        withAuthoringEvent(event) { inProgressView.finishStroke(it, activePointerId, strokeId) }
                     }
                     activePointerId = MotionEvent.INVALID_POINTER_ID
                     activeStrokeId = null
@@ -693,10 +735,23 @@ internal class InkCanvasView(context: Context) : FrameLayout(context) {
         var onContentError: ((String) -> Unit)? = null
         private val contentRenderer = ContentRenderer(context, { invalidate() }, { onContentError?.invoke(it) })
         private var content: List<ContentObject> = emptyList()
-        fun setContent(value: List<ContentObject>) { content = value; invalidate() }
+        fun setContent(value: List<ContentObject>) {
+            if (content == value) return
+            content = value; rebuildDrawOrder(); invalidate()
+        }
         override fun onAttachedToWindow() { super.onAttachedToWindow(); contentRenderer.attach() }
         override fun onDetachedFromWindow() { contentRenderer.detach(); super.onDetachedFromWindow() }
         private var strokes: List<DecodedInkStroke> = emptyList()
+        private data class DrawItem(val time: Long, val id: String, val bounds: InkBounds,
+            val stroke: Stroke? = null, val content: ContentObject? = null)
+        private var drawOrder: List<DrawItem> = emptyList()
+        private fun rebuildDrawOrder() {
+            drawOrder = (strokes.map { DrawItem(it.record.createdAt, it.record.id,
+                InkBounds(it.bounds.left - it.stroke.brush.size, it.bounds.top - it.stroke.brush.size,
+                    it.bounds.right + it.stroke.brush.size, it.bounds.bottom + it.stroke.brush.size), stroke = it.stroke) } +
+                content.map { DrawItem(it.entity.createdAt, it.entity.id, it.bounds, content = it) })
+                .sortedWith(compareBy<DrawItem> { it.time }.thenBy { it.id })
+        }
         private var viewportX = 0f
         private var viewportY = 0f
         private var viewportScale = 1f
@@ -723,7 +778,7 @@ internal class InkCanvasView(context: Context) : FrameLayout(context) {
                 it.bounds.top - it.stroke.brush.size <= bottom }.map { it.record.id }.toSet()
         }
         fun setStrokes(value: List<DecodedInkStroke>, x: Float, y: Float, scale: Float, isInfinite: Boolean, paperBackground: String, width: Float, height: Float) {
-            strokes = value
+            if (strokes != value) { strokes = value; rebuildDrawOrder() }
             viewportX = x
             viewportY = y
             viewportScale = scale
@@ -740,18 +795,16 @@ internal class InkCanvasView(context: Context) : FrameLayout(context) {
                 canvas.translate(viewportX, viewportY)
                 canvas.scale(viewportScale, viewportScale)
                 drawPaper(canvas)
-                val visible = visibleStrokeIds()
-                val visibleContent = content.filter { it.bounds.right >= -viewportX / viewportScale &&
-                    it.bounds.left <= (width - viewportX) / viewportScale && it.bounds.bottom >= -viewportY / viewportScale &&
-                    it.bounds.top <= (height - viewportY) / viewportScale }
-                contentRenderer.prepare(visibleContent, viewportScale)
-                val strokeById = strokes.filter { it.record.id in visible }.associateBy { it.record.id }
-                val contentById = visibleContent.associateBy { it.entity.id }
-                val order = strokeById.values.map { Triple(it.record.createdAt, it.record.id, true) } +
-                    contentById.values.map { Triple(it.entity.createdAt, it.entity.id, false) }
-                order.sortedWith(compareBy<Triple<Long, String, Boolean>> { it.first }.thenBy { it.second }).forEach { item ->
-                    if (item.third) strokeById[item.second]?.let { scope.drawStroke(it.stroke) }
-                    else contentById[item.second]?.let { contentRenderer.draw(canvas, it) }
+                val left = -viewportX / viewportScale
+                val top = -viewportY / viewportScale
+                val right = (width - viewportX) / viewportScale
+                val bottom = (height - viewportY) / viewportScale
+                val visible = drawOrder.filter { it.bounds.right >= left && it.bounds.left <= right &&
+                    it.bounds.bottom >= top && it.bounds.top <= bottom }
+                contentRenderer.prepare(visible.mapNotNull { it.content }, viewportScale)
+                visible.forEach { item ->
+                    item.stroke?.let { scope.drawStroke(it) }
+                    item.content?.let { contentRenderer.draw(canvas, it) }
                 }
                 canvas.restore()
             }
@@ -773,6 +826,7 @@ internal class InkCanvasView(context: Context) : FrameLayout(context) {
         val inputTool: InputToolType) {
         val inputs = MutableStrokeInputBatch()
         var finishedRecord: InkStrokeRecord? = null
+        var finishedBounds: InkBounds? = null
 
         fun append(event: MotionEvent, index: Int) {
             val hasPressure = event.device?.getMotionRange(MotionEvent.AXIS_PRESSURE) != null

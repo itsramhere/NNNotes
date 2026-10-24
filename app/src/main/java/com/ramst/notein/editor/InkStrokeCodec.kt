@@ -13,6 +13,7 @@ import androidx.ink.brush.BrushBehavior
 import androidx.ink.storage.StrokeInputBatchSerialization
 import androidx.ink.strokes.Stroke
 import androidx.ink.strokes.MutableStrokeInputBatch
+import androidx.ink.strokes.StrokeInputBatch
 import com.ramst.notein.storage.EditableObjectEntity
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -134,7 +135,19 @@ internal fun strokeRecordFrom(
     size: Float,
     createdAt: Long = System.currentTimeMillis(),
 ): InkStrokeRecord {
-    val inputs = stroke.inputs
+    return strokeRecordFromInputs(id, pageId, stroke.inputs, tool, color, size, createdAt)
+}
+
+/** Persist samples on pointer-up without constructing a second native stroke mesh. */
+internal fun strokeRecordFromInputs(
+    id: String,
+    pageId: String,
+    inputs: StrokeInputBatch,
+    tool: InkTool,
+    color: Int,
+    size: Float,
+    createdAt: Long,
+): InkStrokeRecord {
     var left = Float.POSITIVE_INFINITY
     var top = Float.POSITIVE_INFINITY
     var right = Float.NEGATIVE_INFINITY

@@ -3,6 +3,7 @@ package com.ramst.notein.editor
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -11,7 +12,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.AssistChip
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
@@ -50,24 +51,24 @@ internal fun PaperTemplateDialog(initial: PaperTemplate, autoMatchingPages: Bool
         text = { Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState())) {
             PaperTemplatePreview(template, Modifier.fillMaxWidth().height(130.dp))
             Text("Layout")
-            Row(Modifier.horizontalScroll(rememberScrollState())) { PaperBackground.entries.forEach { option ->
-                AssistChip(onClick = { if (pattern != option) { pattern = option; spacing = if (option == PaperBackground.LINED) 7f else 5f } }, label = { Text(option.label()) }, leadingIcon = if (pattern == option) ({ Text("✓") }) else null)
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) { PaperBackground.entries.forEach { option ->
+                FilterChip(selected = pattern == option, onClick = { if (pattern != option) { pattern = option; spacing = if (option == PaperBackground.LINED) 7f else 5f } }, label = { Text(option.label()) }, leadingIcon = if (pattern == option) ({ Text("✓") }) else null)
             } }
             if (pattern != PaperBackground.BLANK) {
                 PaperSpacingControls(pattern, spacing) { spacing = it }
-                Row(Modifier.horizontalScroll(rememberScrollState())) { PaperPatternWeight.entries.forEach { option ->
-                    AssistChip(onClick = { weight = option }, label = { Text(option.label(pattern)) }, leadingIcon = if (weight == option) ({ Text("✓") }) else null)
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) { PaperPatternWeight.entries.forEach { option ->
+                    FilterChip(selected = weight == option, onClick = { weight = option }, label = { Text(option.label(pattern)) }, leadingIcon = if (weight == option) ({ Text("✓") }) else null)
                 } }
             }
             Text("Background")
-            Row(Modifier.horizontalScroll(rememberScrollState())) { PaperColor.entries.forEach { option ->
-                AssistChip(onClick = { color = option.argb }, label = { Text(option.name.lowercase().replaceFirstChar { it.titlecase() }) }, leadingIcon = if (color == option.argb) ({ Text("✓") }) else null)
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) { PaperColor.entries.forEach { option ->
+                FilterChip(selected = color == option.argb, onClick = { color = option.argb }, label = { Text(option.name.lowercase().replaceFirstChar { it.titlecase() }) }, leadingIcon = if (color == option.argb) ({ Text("✓") }) else null)
             } }
             OutlinedTextField(customColor, { value -> customColor = value; parsePaperColor(value)?.let { color = it } }, label = { Text("Custom color #RRGGBB") }, singleLine = true)
-            if (!isInfinite) Row(Modifier.horizontalScroll(rememberScrollState())) { PaperSize.entries.forEach { option ->
-                AssistChip(onClick = { size = option }, label = { Text(option.name) }, leadingIcon = if (size == option) ({ Text("✓") }) else null)
+            if (!isInfinite) Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) { PaperSize.entries.forEach { option ->
+                FilterChip(selected = size == option, onClick = { size = option }, label = { Text(option.name) }, leadingIcon = if (size == option) ({ Text("✓") }) else null)
             } }
-            if (!isInfinite) AssistChip(onClick = { landscape = !landscape }, label = { Text(if (landscape) "Landscape" else "Portrait") })
+            if (!isInfinite) FilterChip(selected = landscape, onClick = { landscape = !landscape }, label = { Text(if (landscape) "Landscape" else "Portrait") })
             if (autoMatchingPages != null) Row(Modifier.fillMaxWidth()) { Switch(automatic, { automatic = it }); Spacer(Modifier.width(8.dp)); Text("Automatically add next page") }
         } },
         confirmButton = { Button(onClick = { onSave(template, autoMatchingPages?.let { automatic }) }) { Text("Save") } },

@@ -13,16 +13,15 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.Surface
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -42,6 +41,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.drawscope.translate
@@ -54,6 +54,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -122,10 +124,20 @@ internal fun EditorScreen(
     }
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
-            CenterAlignedTopAppBar(
-                expandedHeight = 48.dp,
-                title = { Text(state.notebook?.title ?: "Notebook") },
+            TopAppBar(
+                expandedHeight = 56.dp,
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
+                title = {
+                    Column {
+                        Text(if (state.isInfinite) "INFINITE CANVAS" else "NOTEBOOK",
+                            style = MaterialTheme.typography.labelSmall, fontSize = 9.sp,
+                            letterSpacing = 1.6.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(state.notebook?.title ?: "Notebook", style = MaterialTheme.typography.titleMedium,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                },
                 navigationIcon = {
                     IconButton(onClick = guardedNavigateUp, enabled = !cannotLeave) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back to notebooks")
@@ -137,6 +149,12 @@ internal fun EditorScreen(
                         Text("Exporting ${exportProgress.completed}/${exportProgress.total}", style = MaterialTheme.typography.labelMedium)
                         TextButton(onClick = viewModel::cancelExport) { Text("Cancel") }
                     }
+                    Surface(shape = CircleShape, color = if (state.hasUnsavedChanges || state.canRetry)
+                        MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.secondaryContainer) {
+                    Row(Modifier.padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Box(Modifier.size(5.dp).background(if (state.hasUnsavedChanges || state.canRetry)
+                        MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary, CircleShape))
                     Text(
                         when (state.saveMessage) {
                             "Changes kept in memory" -> "Unsaved"
@@ -145,9 +163,12 @@ internal fun EditorScreen(
                             else -> state.saveMessage
                         },
                         style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = if (state.hasUnsavedChanges || state.canRetry) MaterialTheme.colorScheme.onTertiaryContainer
+                            else MaterialTheme.colorScheme.onSecondaryContainer,
                     )
-                    Spacer(Modifier.width(8.dp))
+                    }
+                    }
+                    Spacer(Modifier.width(16.dp))
                 },
             )
         },
@@ -194,28 +215,25 @@ internal fun EditorScreen(
                     },
                     onPagePaper = { showPagePaper = true },
                     onNotebookPaper = { showNotebookPaper = true },
-                )
-                ContentToolbar(
-                    state = state,
+                    onSelectPage = viewModel::selectPage,
+                    onDuplicatePage = viewModel::duplicateCurrentPage,
+                    onDeletePage = viewModel::deleteCurrentPage,
+                    onLayoutChange = viewModel::setPageLayout,
+                    onFit = { if (state.isInfinite) controller.fitContent() else controller.fitPage() },
                     onCopy = viewModel::copySelection,
-                    onDelete = viewModel::deleteSelection,
+                    onCut = viewModel::cutSelection,
+                    onPaste = viewModel::pasteSelection,
+                    onDeleteSelection = viewModel::deleteSelection,
                     onEditText = { state.selectedIds.singleOrNull()?.let(editText) },
                     onClear = { viewModel.selectObject(null) },
                 )
-                HorizontalDivider()
-                PageNavigator(
-                    state = state,
-                    onSelect = viewModel::selectPage,
-                    onDuplicate = viewModel::duplicateCurrentPage,
-                    onDelete = viewModel::deleteCurrentPage,
-                    onLayoutChange = viewModel::setPageLayout,
-                    onFit = { if (state.isInfinite) controller.fitContent() else controller.fitPage() },
-                )
-                HorizontalDivider()
                 InkSurface(
                     page = page,
                     pageId = page.id,
                     records = state.strokes,
+                    currentPageStrokes = { pageId -> viewModel.uiState.value.let { current ->
+                        if (current.page?.id == pageId) current.strokes else emptyList()
+                    } },
                     objects = state.objects,
                     selectedIds = state.selectedIds,
                     lassoEnabled = state.lassoEnabled,
@@ -329,51 +347,6 @@ internal fun EditorScreen(
 }
 
 @Composable
-private fun PageNavigator(
-    state: EditorUiState,
-    onSelect: (String) -> Unit,
-    onDuplicate: () -> Unit,
-    onDelete: () -> Unit,
-    onLayoutChange: (PageLayout) -> Unit,
-    onFit: () -> Unit,
-) {
-    val page = state.page ?: return
-    val ready = !state.pageBusy && state.pendingInk == 0
-    val locked = state.notebook?.viewportLocked == true
-    val navigationHint = "Use " + (if (page.fingerWriting) "two fingers" else "one finger") +
-        (if (state.isInfinite) " to navigate" else " to scroll vertically")
-    LazyRow(
-        modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Page navigation" },
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        item { Text("${if (state.isInfinite) "Canvas" else "Page"} ${state.pageNumber}${if (state.isInfinite) "" else " of ${state.pages.size}"}",
-            style = MaterialTheme.typography.labelMedium) }
-        if (!state.isInfinite) {
-            items(state.pages, key = { it.id }) { candidate ->
-                FilterChip(selected = candidate.id == page.id, enabled = ready,
-                    onClick = { onSelect(candidate.id) },
-                    leadingIcon = { MixedPagePreview(candidate, state.previews[candidate.id].orEmpty(),
-                        candidate.pdfSourceId?.let { state.pdfSources[it]?.localPath }) },
-                    label = { Text("${candidate.sortIndex + 1}") })
-            }
-            items(PageLayout.entries) { layout ->
-                FilterChip(selected = state.notebook?.pageLayout == layout.storageValue,
-                    enabled = ready, onClick = { onLayoutChange(layout) }, label = { Text(layout.label) })
-            }
-            item { TextButton(onClick = onDuplicate, enabled = ready && !state.hasUnsavedChanges) { Text("Duplicate") } }
-            item { TextButton(onClick = onDelete, enabled = ready && !state.hasUnsavedChanges && state.pages.size > 1) { Text("Delete") } }
-        }
-        item { TextButton(onClick = onFit, enabled = ready && !locked) { Text(if (state.isInfinite) "Fit content" else "Fit page") } }
-        item { Text("${kotlin.math.round(page.viewportScale * 100f).toInt()}% · ${if (locked) "Zoom locked" else "Zoom unlocked"}",
-            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-        item { Text(if (locked) "Zoom locked · $navigationHint" else navigationHint,
-            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-    }
-}
-
-@Composable
 internal fun ToolStrokeSample(tool: InkTool, color: Int, thickness: Float) {
     val stroke = remember(tool, color, thickness) {
         val inputs = androidx.ink.strokes.MutableStrokeInputBatch()
@@ -400,6 +373,7 @@ private fun InkSurface(
     page: PageEntity,
     pageId: String,
     records: List<InkStrokeRecord>,
+    currentPageStrokes: (String) -> List<InkStrokeRecord>,
     objects: List<EditableObjectEntity>,
     selectedIds: Set<String>,
     lassoEnabled: Boolean,
@@ -439,6 +413,7 @@ private fun InkSurface(
 ) {
     val context = LocalContext.current
     var surfaceSize by remember { mutableStateOf(Size.Zero) }
+    val workspaceColor = MaterialTheme.colorScheme.surfaceContainerHigh.toArgb()
     LaunchedEffect(surfaceSize, pageId, inputEnabled) {
         if (inputEnabled && surfaceSize.width > 0f && surfaceSize.height > 0f) onViewportResized(surfaceSize.width, surfaceSize.height)
     }
@@ -454,10 +429,13 @@ private fun InkSurface(
                 canvas.onViewportChanged = onViewportChanged
                 canvas.setViewportLocked(viewportLocked)
                 canvas.onPendingInkChanged = onPendingInkChanged
+                canvas.currentPageStrokes = currentPageStrokes
                 canvas.setPageId(pageId)
                 canvas.setContentObjects(objects, selectedIds, lassoEnabled, onLasso, onTransform, onSelectObject, onEditText, onContentError)
                 canvas.setStoredStrokes(records)
                 canvas.setDocument(isInfinite, paperBackground, pageWidth, pageHeight, paperSpacingMm, paperPatternWeight, paperBackgroundColor)
+                if (!isInfinite && (canvas.background as? android.graphics.drawable.ColorDrawable)?.color != workspaceColor)
+                    canvas.setBackgroundColor(workspaceColor)
                 canvas.setPdfBackground(pdfSourcePath, page, onContentError)
                 canvas.setEditorState(activeTool, color, thickness, fingerWriting, viewportX, viewportY, viewportScale)
                 canvas.setPageNavigation(pageLayout, neighbors, onPageNavigate)
@@ -469,7 +447,7 @@ private fun InkSurface(
 }
 
 @Composable
-private fun MixedPagePreview(page: PageEntity, previews: List<PreviewStroke>, path: String?) {
+internal fun MixedPagePreview(page: PageEntity, previews: List<PreviewStroke>, path: String?) {
     if (page.pdfPageIndex == null) PagePreview(page, previews)
     else Box(Modifier.size(24.dp, 32.dp)) {
         AndroidView(factory = { com.ramst.notein.pdf.PdfPageRenderer(it) }, modifier = Modifier.fillMaxSize(), update = { renderer ->

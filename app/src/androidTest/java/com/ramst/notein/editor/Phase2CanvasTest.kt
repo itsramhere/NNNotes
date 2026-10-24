@@ -27,6 +27,7 @@ class Phase2CanvasTest {
     private val pans = CopyOnWriteArrayList<Pair<Float, Float>>()
     private var clock = SystemClock.uptimeMillis()
     private var downTime = clock
+    private var pressureDeviceId = 0
     private val pendingInk = java.util.concurrent.atomic.AtomicInteger(0)
 
     @Before fun setup() {
@@ -68,7 +69,7 @@ class Phase2CanvasTest {
         } }.toTypedArray()
         scenario.onActivity {
             val motion = MotionEvent.obtain(downTime, clock, action, pointers.size, properties,
-                coords, 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_STYLUS, flags)
+                coords, 0, 0, 1f, 1f, pressureDeviceId, 0, InputDevice.SOURCE_STYLUS, flags)
             try { canvas.dispatchTouchEvent(motion) } finally { motion.recycle() }
         }
     }
@@ -77,6 +78,15 @@ class Phase2CanvasTest {
         event(MotionEvent.ACTION_DOWN, Pointer(0, x, y, pressure = pressure))
         event(MotionEvent.ACTION_MOVE, Pointer(0, x + 50f, y + 20f, pressure = pressure))
         event(MotionEvent.ACTION_UP, Pointer(0, x + 100f, y + 40f, pressure = pressure))
+    }
+
+    private fun usePressureDevice() {
+        // Device 0 is a keyboard on the emulator and intentionally takes the neutral-pressure
+        // fallback. Pressure-preservation checks need an input device declaring that axis.
+        pressureDeviceId = requireNotNull(InputDevice.getDeviceIds().asSequence().mapNotNull { InputDevice.getDevice(it) }
+            .firstOrNull { it.supportsSource(InputDevice.SOURCE_STYLUS) && it.getMotionRange(MotionEvent.AXIS_PRESSURE) != null }) {
+            "This pressure-input test requires a device with a stylus pressure range."
+        }.id
     }
 
     private fun await(predicate: () -> Boolean) {
@@ -138,6 +148,7 @@ class Phase2CanvasTest {
     }
 
     @Test fun rapidPressureStrokesDotsAndViewportUseDocumentCoordinates() {
+        usePressureDevice()
         state(x = 40f, y = 30f)
         repeat(8) { stroke(100f + it * 20f, 100f + it * 15f, 0.1f + it * 0.1f) }
         event(MotionEvent.ACTION_DOWN, Pointer(0, 80f, 70f))
@@ -205,6 +216,7 @@ class Phase2CanvasTest {
     }
 
     @Test fun edgeDotsAndPressureChangesKeepAllSamples() {
+        usePressureDevice()
         state()
         event(MotionEvent.ACTION_DOWN, Pointer(0, 1f, 1f, pressure = 0.1f))
         event(MotionEvent.ACTION_MOVE, Pointer(0, 20f, 20f, pressure = 0.9f))
@@ -238,6 +250,26 @@ class Phase2CanvasTest {
         }
         await { pendingInk.get() == 0 }
         scenario.onActivity { assertTrue(canvas.displayedStrokeIds().isEmpty()) }
+    }
+
+    @Test fun previousFrameCannotDiscardNewStrokeOrUndoWhenCurrentSessionIsAvailable() {
+        state()
+        scenario.onActivity {
+            drawSyntheticStroke(canvas, 100f, 100f)
+            drawSyntheticStroke(canvas, 200f, 150f)
+            val desired = commits.toList()
+            canvas.currentPageStrokes = { desired }
+            // Simulate a queued Compose update which only knows about the first stroke.
+            canvas.setStoredStrokes(listOf(commits.first()))
+        }
+        await { pendingInk.get() == 0 }
+        scenario.onActivity {
+            assertEquals(commits.map { it.id }.toSet(), canvas.displayedStrokeIds())
+            canvas.currentPageStrokes = { listOf(commits.first()) }
+            // A queued frame containing both strokes must not resurrect an undone stroke.
+            canvas.setStoredStrokes(commits.toList())
+            assertEquals(setOf(commits.first().id), canvas.displayedStrokeIds())
+        }
     }
 }
 

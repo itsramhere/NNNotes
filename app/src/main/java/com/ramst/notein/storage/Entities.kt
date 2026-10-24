@@ -212,4 +212,5 @@ data class NotebookListItem(
     val folderName: String?,
     val updatedAt: Long,
     val trashedAt: Long?,
+    val notebookType: String = NotebookType.STANDARD.storageValue,
 )

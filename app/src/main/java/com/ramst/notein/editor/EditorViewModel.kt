@@ -42,6 +42,7 @@ internal data class EditorUiState(
     val objects: List<EditableObjectEntity> = emptyList(),
     val selectedIds: Set<String> = emptySet(),
     val lassoEnabled: Boolean = false,
+    val hasSelectionClipboard: Boolean = false,
     val pdfDocument: PdfDocumentEntity? = null,
     val pdfSources: Map<String, PdfDocumentEntity> = emptyMap(),
     val toolThicknesses: Map<String, Float> = emptyMap(),
@@ -89,6 +90,7 @@ internal class EditorViewModel(
     private var importingPdf = false
     private var pageTransitionBusy = false
     private val pendingToolThicknesses = mutableMapOf<String, Float>()
+    private var selectionClipboard: List<EditableObjectEntity> = emptyList()
 
     fun preparePdf(uri: Uri, center: PointF) {
         val state = _uiState.value
@@ -160,11 +162,18 @@ internal class EditorViewModel(
         }
         viewModelScope.launch { for (ignored in saveRequests) saveCurrentPageUntilClean() }
         viewModelScope.launch {
+            var previewCache = emptyMap<String, Pair<EditableObjectEntity, PreviewStroke?>>()
             repository.observeNotebookObjects(notebookId).distinctUntilChanged().collectLatest { objects ->
-                val previews = withContext(Dispatchers.Default) {
-                    objects.groupBy { it.pageId }.mapValues { (_, entities) -> entities.mapNotNull { it.toContentPreview() } }
+                val updatedCache = withContext(Dispatchers.Default) {
+                    objects.associate { entity ->
+                        entity.id to (previewCache[entity.id]?.takeIf { it.first == entity }
+                            ?: (entity to entity.toContentPreview()))
+                    }
                 }
-                _uiState.update { it.copy(previews = previews, pageObjects = objects.groupBy { objectEntity -> objectEntity.pageId }) }
+                previewCache = updatedCache
+                val byPage = objects.groupBy { it.pageId }
+                val previews = byPage.mapValues { (_, entities) -> entities.mapNotNull { updatedCache[it.id]?.second } }
+                _uiState.update { it.copy(previews = previews, pageObjects = byPage) }
             }
         }
     }
@@ -213,14 +222,28 @@ internal class EditorViewModel(
         _uiState.update { it.copy(strokes = emptyList(), objects = emptyList(), selectedIds = emptySet(), pendingInk = 0) }
         objectsJob = viewModelScope.launch {
             try {
-                repository.observeObjects(pageId).collect { objects ->
-                    val records = objects.mapNotNull(EditableObjectEntity::toInkStrokeRecord)
-                    check(withContext(Dispatchers.Default) { records.all { it.decode() != null } }) { "Saved ink could not be decoded; no data was changed." }
-                    check(objects.filter { it.type in EDITABLE_CONTENT_TYPES }.all { it.toContentObject() != null }) {
-                        "Saved content could not be decoded; no data was changed."
+                var loaded = false
+                repository.observeObjects(pageId).distinctUntilChanged().collect { emission ->
+                    val state = _uiState.value
+                    val supported = emission.filter { it.type in EDITABLE_CONTENT_TYPES }
+                    if (loaded && (state.hasUnsavedChanges || supported == state.objects)) return@collect
+                    val loadingRevision = revision
+                    // A Room emission can be queued behind several newer saves. Read the latest
+                    // committed snapshot after the writer finishes instead of replaying old ink.
+                    val objects = if (!loaded) supported else saveMutex.withLock {
+                        repository.pageObjects(pageId).filter { it.type in EDITABLE_CONTENT_TYPES }
                     }
-                    if (_uiState.value.page?.id == pageId) _uiState.update {
-                        if (it.hasUnsavedChanges) it else it.copy(strokes = records, objects = objects.filter { objectEntity -> objectEntity.type in EDITABLE_CONTENT_TYPES }, pageBusy = importingImage || importingPdf || confirmingPdf || pageTransitionBusy)
+                    val records = objects.mapNotNull(EditableObjectEntity::toInkStrokeRecord)
+                    withContext(Dispatchers.Default) {
+                        check(records.all { it.decode() != null }) { "Saved ink could not be decoded; no data was changed." }
+                        check(objects.all { it.toContentObject() != null }) {
+                            "Saved content could not be decoded; no data was changed."
+                        }
+                    }
+                    if (_uiState.value.page?.id == pageId && revision == loadingRevision && !_uiState.value.hasUnsavedChanges) {
+                        loaded = true
+                        _uiState.update { it.copy(strokes = records, objects = objects,
+                            pageBusy = importingImage || importingPdf || confirmingPdf || pageTransitionBusy) }
                     }
                 }
             } catch (exception: CancellationException) { throw exception }
@@ -442,12 +465,29 @@ internal class EditorViewModel(
     fun copySelection() {
         if (!canEditContent()) return
         val originals = _uiState.value.objects.filter { it.id in _uiState.value.selectedIds }
+        if (originals.isEmpty()) return
+        selectionClipboard = originals
+        _uiState.update { it.copy(hasSelectionClipboard = true) }
+        // Keep the existing one-tap copy behavior, and make the copy available to Paste.
+        pasteSelection()
+    }
+    fun cutSelection() {
+        if (!canEditContent()) return
+        val originals = _uiState.value.objects.filter { it.id in _uiState.value.selectedIds }
+        if (originals.isEmpty()) return
+        selectionClipboard = originals
+        _uiState.update { it.copy(hasSelectionClipboard = true) }
+        deleteSelection()
+    }
+    fun pasteSelection() {
+        if (!canEditContent() || selectionClipboard.isEmpty()) return
+        val pageId = _uiState.value.page?.id ?: return
         val now = nextInsertionTime()
-        val copies = originals.mapIndexed { index, entity ->
-            transformContent(entity, 0f, 0f, 24f, 24f, 1f).copy(id = UUID.randomUUID().toString(), createdAt = now + index)
+        val copies = selectionClipboard.mapIndexed { index, entity ->
+            transformContent(entity, 0f, 0f, 24f, 24f, 1f).copy(id = UUID.randomUUID().toString(), pageId = pageId, createdAt = now + index)
         }
         commitChange(emptyList(), copies)
-        _uiState.update { it.copy(selectedIds = copies.map { objectEntity -> objectEntity.id }.toSet()) }
+        _uiState.update { it.copy(lassoEnabled = true, selectedIds = copies.map { objectEntity -> objectEntity.id }.toSet()) }
     }
 
     fun saveText(existingId: String?, text: String, fontSize: Float, color: Int, bold: Boolean, italic: Boolean) {

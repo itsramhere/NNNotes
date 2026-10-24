@@ -2,13 +2,15 @@ package com.ramst.notein.editor
 
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.material3.AssistChip
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import com.ramst.notein.storage.PaperBackground
 import com.ramst.notein.storage.PaperPatternWeight
 
@@ -28,10 +30,10 @@ internal fun PaperSpacingControls(pattern: PaperBackground, spacing: Float, onCh
     var input by remember(pattern, spacing) { mutableStateOf(spacing.toString()) }
     val value = input.toFloatOrNull()
     Text("Spacing: $spacing mm")
-    Row(Modifier.horizontalScroll(rememberScrollState())) {
+    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         val presets = if (pattern == PaperBackground.LINED) listOf("Narrow" to 4f, "Normal" to 7f, "Wide" to 12f)
             else listOf("Fine" to 2f, "Normal" to 5f, "Wide" to 10f)
-        presets.forEach { (name, mm) -> AssistChip(onClick = { onChange(mm) }, label = { Text("$name ${mm.toInt()} mm") }) }
+        presets.forEach { (name, mm) -> FilterChip(selected = spacing == mm, onClick = { onChange(mm) }, label = { Text("$name ${mm.toInt()} mm") }) }
     }
     Slider(spacing.coerceIn(minimum, maximum), onChange, valueRange = minimum..maximum)
     OutlinedTextField(input, { text ->

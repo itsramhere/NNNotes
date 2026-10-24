@@ -31,6 +31,44 @@ class Phase10EditorTest {
     }
     @Before fun setup() = runBlocking { f = Phase10Fixture(); id = f.notebook(); open() }
     @After fun cleanup() { main { store.clear() }; f.close() }
+    @Test fun cutAndPasteMixedContentAcrossPagesRemainUndoableAndDurable() = runBlocking {
+        val source = model.uiState.value.page!!.id
+        main {
+            model.onStrokeCommitted(record(pageId = source))
+            model.saveText(null, "Move with lasso", 24f, android.graphics.Color.BLUE, true, false)
+        }
+        saved()
+        val originals = f.editor.pageObjects(source)
+        assertEquals(2, originals.size)
+        main {
+            model.selectLasso(listOf(PointF(-1000f, -1000f), PointF(10000f, -1000f), PointF(10000f, 10000f), PointF(-1000f, 10000f)))
+            model.cutSelection()
+        }
+        saved()
+        assertTrue(f.editor.pageObjects(source).isEmpty())
+        assertTrue(model.uiState.value.hasSelectionClipboard)
+        main { model.undo(InkEditorController()) }; saved()
+        assertEquals(originals, f.editor.pageObjects(source))
+        main { model.redo(InkEditorController()) }; saved()
+        assertTrue(f.editor.pageObjects(source).isEmpty())
+        main { model.nextPage() }
+        await { model.uiState.value.page!!.id != source && !model.uiState.value.pageBusy }
+        val target = model.uiState.value.page!!.id
+        main { model.pasteSelection() }; saved()
+        val pasted = f.editor.pageObjects(target)
+        assertEquals(2, pasted.size)
+        assertTrue(pasted.all { it.pageId == target && it.id !in originals.map { original -> original.id } })
+        assertEquals("Move with lasso", pasted.single { it.type == TEXT_OBJECT_TYPE }.toContentObject()!!.text)
+        val originalInk = originals.single { it.type == INK_STROKE_TYPE }.toInkStrokeRecord()!!.decode()!!.stroke
+        val pastedInk = pasted.single { it.type == INK_STROKE_TYPE }.toInkStrokeRecord()!!.decode()!!.stroke
+        assertEquals(originalInk.inputs.size, pastedInk.inputs.size)
+        main { model.undo(InkEditorController()) }; saved()
+        assertTrue(f.editor.pageObjects(target).isEmpty())
+        main { model.redo(InkEditorController()) }; saved()
+        open(); saved()
+        assertEquals(pasted, f.editor.pageObjects(target))
+        assertTrue(f.editor.pageObjects(source).isEmpty())
+    }
     @Test fun fractionalIndependentWidthsSurvivePagesNotebooksAndRecreationWithoutRestylingInk() = runBlocking {
         val tools = listOf(InkTool.Pencil, InkTool.BallPen, InkTool.Pen, InkTool.Highlighter)
         val widths = listOf(.375f, 1.25f, 8.5f, 13.25f)

@@ -19,6 +19,8 @@ local.properties
 *.jks
 *.keystore
 keystore.properties
+key.properties
+/signing/
 .env
 .env.*
 !.env.example
@@ -30,14 +32,32 @@ keystore.properties
 .DS_Store
 Thumbs.db
 Desktop.ini
+*.swp
+*.swo
+*~
+
+# Local notebook databases, device exports and backups
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+/backups/
+/device-backups/
+/device-dumps/
+/artifacts/
+/screenrecordings/
 
 # Scratch files and generated verification artifacts
 /tmp/
 /inspection/
 __pycache__/
 *.py[cod]
+*.log
 /reports/**/*
 !/reports/**/
 !/reports/**/*.md
 
-# Source assets, Room schemas and the Gradle wrapper remain eligible for Git.
+# Curated documentation screenshots live in /docs/screenshots/ and remain eligible.
+# Source assets, Room schema JSON and the Gradle wrapper also remain eligible.

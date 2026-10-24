@@ -40,6 +40,11 @@ class Phase10UiTest {
         val dir = File(compose.activity.filesDir, "phase10-evidence").apply { mkdirs() }
         File(dir, name).outputStream().use { compose.onRoot().captureToImage().asAndroidBitmap().compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
     }
+    private fun settings() = compose.onNodeWithContentDescription("Settings").performScrollTo().performClick()
+    private fun dismissSettings() {
+        androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
+        compose.waitForIdle()
+    }
     @Test fun firstAndNewPaperPagesOpenFittedInTheFrameCenter() = runBlocking {
         id = f.notebook(); open(); saved()
         fun assertCentered() {
@@ -51,7 +56,9 @@ class Phase10UiTest {
             assertTrue(page.pageHeight * page.viewportScale <= page.viewportHeight + .01f)
         }
         assertCentered()
+        settings()
         compose.onNodeWithText("Use one finger to scroll vertically").performScrollTo().assertIsDisplayed()
+        dismissSettings()
         screenshot("paper-centered.png")
         val firstId = model.uiState.value.page!!.id
         compose.onNodeWithContentDescription("Settings").performScrollTo().performClick()
@@ -71,7 +78,9 @@ class Phase10UiTest {
         compose.activityRule.scenario.onActivity { model.updateViewport(0f, 0f, 1.5f) }; saved()
         compose.onNodeWithContentDescription("Lock zoom").performClick()
         compose.waitUntil(15000) { model.uiState.value.notebook!!.viewportLocked && !model.uiState.value.pageBusy }; saved()
-        compose.onNodeWithText("Side by side").assertIsSelected()
+        settings()
+        compose.onNodeWithText("Side by side").performScrollTo().assertIsSelected()
+        dismissSettings()
         compose.onNodeWithText("Move ←").assertDoesNotExist(); compose.onNodeWithText("Move →").assertDoesNotExist()
         fun findCanvas(view: android.view.View): InkCanvasView? {
             if (view is InkCanvasView) return view
@@ -92,9 +101,12 @@ class Phase10UiTest {
         drag(0f, -400f, false); screenshot("pages-horizontal-drag.png"); drag(0f, -400f, true)
         compose.waitUntil(15000) { model.uiState.value.page!!.id == second && !model.uiState.value.pageBusy }; saved()
         assertEquals(1.5f, model.uiState.value.page!!.viewportScale, 0f)
-        compose.onNodeWithText("One below another").performClick()
+        settings()
+        compose.onNodeWithText("One below another").performScrollTo().performClick()
         compose.waitUntil(15000) { model.uiState.value.notebook!!.pageLayout == "vertical" }; saved()
-        compose.onNodeWithText("One below another").assertIsSelected()
+        settings()
+        compose.onNodeWithText("One below another").performScrollTo().assertIsSelected()
+        dismissSettings()
         compose.activityRule.scenario.onActivity { model.selectPage(first) }
         compose.waitUntil(15000) { model.uiState.value.page!!.id == first && !model.uiState.value.pageBusy }; saved()
         fun toolbarPixel(): Int {
@@ -108,7 +120,9 @@ class Phase10UiTest {
         compose.waitUntil(15000) { model.uiState.value.page!!.id == second && !model.uiState.value.pageBusy }; saved()
         assertEquals(1.5f, model.uiState.value.page!!.viewportScale, 0f)
         open(); saved()
-        compose.onNodeWithText("One below another").assertIsSelected()
+        settings()
+        compose.onNodeWithText("One below another").performScrollTo().assertIsSelected()
+        dismissSettings()
         assertEquals(1.5f, model.uiState.value.page!!.viewportScale, 0f)
         screenshot("pages-vertical-reopened.png")
     }
@@ -123,9 +137,11 @@ class Phase10UiTest {
         compose.onNodeWithContentDescription("Lock zoom").assertIsOff().performClick()
         compose.waitUntil(15000) { model.uiState.value.notebook!!.viewportLocked }
         compose.onNodeWithContentDescription("Lock zoom").assertIsOn()
+        settings()
         compose.onNodeWithText("Zoom locked · Use one finger to navigate").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Use one finger to navigate").assertDoesNotExist()
         compose.onNodeWithText("Fit content").performScrollTo().assertIsNotEnabled()
+        dismissSettings()
         compose.activityRule.scenario.onActivity { model.preparePdf(Uri.fromFile(f.source()), PointF(120f, 40f)) }
         compose.waitUntil(15000) { model.uiState.value.preparedPdf != null }; compose.waitForIdle()
         compose.onNodeWithText("Clear").performClick()
@@ -144,6 +160,8 @@ class Phase10UiTest {
         screenshot("editor-recreated.png")
         compose.onNodeWithContentDescription("Lock zoom").performClick()
         compose.waitUntil(15000) { !model.uiState.value.notebook!!.viewportLocked }
-        compose.onNodeWithText("Fit content").assertIsEnabled()
+        settings()
+        compose.onNodeWithText("Fit content").performScrollTo().assertIsEnabled()
+        dismissSettings()
     }
 }

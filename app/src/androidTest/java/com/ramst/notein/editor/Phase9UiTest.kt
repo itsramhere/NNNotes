@@ -62,14 +62,26 @@ class Phase9UiTest {
     private fun count(table:String):Int = db.openHelper.readableDatabase.query("SELECT COUNT(*) FROM $table").use {it.moveToFirst();it.getInt(0)}
     private fun assets() = File(compose.activity.filesDir,"image-assets").listFiles()?.map {it.name}?.toSet().orEmpty()
     private fun open()=compose.onNodeWithText("New notebook",useUnmergedTree=true).performClick()
+    private fun screenshot(name: String) {
+        val evidence = File(compose.activity.filesDir, "notebook-picker-evidence").apply { mkdirs() }
+        File(evidence, name).outputStream().use {
+            compose.onNode(isDialog()).captureToImage().asAndroidBitmap().compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)
+        }
+    }
 
     @Test fun repeatedCancellationPersistsNothingAndInfiniteHidesPageSettings() {
         val before=assets()
         repeat(4) {
-            open();click("Dots");click("Infinite canvas")
+            open()
+            if (it == 0) screenshot("new-notebook.png")
+            click("Dots");click("Infinite canvas")
             compose.onNodeWithText("Automatically add next page").assertDoesNotExist()
             compose.onNodeWithText("Paper size").assertDoesNotExist()
-            compose.onNodeWithText("Cancel",useUnmergedTree=true).performClick();compose.waitForIdle()
+            if (it == 0) screenshot("infinite-notebook.png")
+            if (it % 2 == 0) compose.onNodeWithText("Cancel",useUnmergedTree=true).performClick()
+            else compose.onNode(isDialog()).performTouchInput { click(androidx.compose.ui.geometry.Offset(2f, 2f)) }
+            compose.waitForIdle()
+            compose.onNode(isDialog()).assertDoesNotExist()
         }
         assertEquals(0,count("notebooks"));assertEquals(0,count("pages"));assertEquals(before,assets())
     }
@@ -77,18 +89,21 @@ class Phase9UiTest {
     @Test fun creationControlsPersistExactTemplateAndRejectDoubleCreate() {
         open();compose.onNodeWithText("Notebook title").performTextInput("Template UI")
         click("Dots")
+        click("More paper options")
         compose.onNodeWithText("Spacing in mm (2–10)").performScrollTo().performTextReplacement("3.5")
         click("Large")
+        click("Custom")
         compose.onNodeWithText("Custom color #RRGGBB").performScrollTo().performTextReplacement("#123ABC")
-        click("LETTER");click("Portrait")
-        compose.onNodeWithText("Landscape",useUnmergedTree=true).assertExists()
-        click("Test folder")
+        click("LETTER");click("Landscape")
+        compose.onNodeWithText("Landscape").assertIsSelected()
+        compose.onNodeWithContentDescription("Choose folder").performScrollTo().performClick()
+        compose.onAllNodesWithText("Test folder").filter(hasAnyAncestor(isPopup())).onFirst().performClick()
         val debugEvidence=File(compose.activity.filesDir,"phase9-evidence").apply {mkdirs()}
         File(debugEvidence,"folder-dialog.txt").writeText(compose.onNode(isDialog()).printToString())
         File(debugEvidence,"folder-dialog.png").outputStream().use {
             compose.onNode(isDialog()).captureToImage().asAndroidBitmap().compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)
         }
-        compose.onNodeWithText("Selected",useUnmergedTree=true).assertExists()
+        compose.onAllNodesWithText("Test folder").filter(hasAnyAncestor(isDialog())).onFirst().assertIsSelected()
         compose.onNodeWithContentDescription("Paper preview").performScrollTo()
         val evidence=File(compose.activity.filesDir,"phase9-evidence").apply {mkdirs()}
         File(evidence,"creation-preview.png").outputStream().use {
@@ -110,14 +125,14 @@ class Phase9UiTest {
         File(evidence,"created-editor.png").outputStream().use {
             compose.onRoot().captureToImage().asAndroidBitmap().compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)
         }
-        compose.onNodeWithText("Export",useUnmergedTree=true).performClick()
+        compose.onNodeWithText("Export",useUnmergedTree=true).performScrollTo().performClick()
         compose.onNodeWithText("Whole notebook").assertExists()
         compose.onNodeWithText("Current page").assertExists()
         compose.onNodeWithText("Cancel",useUnmergedTree=true).performClick()
     }
 
     @Test fun patternSwitchesUseValidDefaultsAndNumericRanges() {
-        open();click("Lined")
+        open();click("Lined");click("More paper options")
         compose.onNodeWithText("Spacing in mm (4–12)").performScrollTo().performTextReplacement("12")
         click("Squares")
         compose.onNodeWithText("Spacing: 5.0 mm").assertExists()
@@ -129,5 +144,39 @@ class Phase9UiTest {
         compose.onNodeWithText("Spacing: 7.0 mm").assertExists()
         compose.onNodeWithText("Cancel",useUnmergedTree=true).performClick()
         assertEquals(0,count("notebooks"))
+    }
+
+    @Test fun visualChoicesKeepTheirValuesAcrossNotebookTypesAndCreateWithAutomaticPagesDisabled() {
+        open()
+        val configuration = compose.onNodeWithTag("Notebook configuration")
+        val scroll = androidx.compose.ui.semantics.SemanticsProperties.VerticalScrollAxisRange
+        val beforeScroll = configuration.fetchSemanticsNode().config[scroll].value()
+        configuration.performTouchInput { swipeUp() }
+        compose.waitForIdle()
+        assertTrue("The form must still scroll with a finger", configuration.fetchSemanticsNode().config[scroll].value() > beforeScroll)
+        compose.onNodeWithText("Notebook title").performScrollTo().performTextInput("A little room to think")
+        click("Squares")
+        compose.onNodeWithText("Squares").assertIsSelected()
+        compose.onNodeWithContentDescription("Paper color Cream").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("Paper color Cream").assertIsSelected()
+        click("A5"); click("Landscape")
+        compose.onNodeWithText("Automatically add next page").performScrollTo().performClick()
+        click("Infinite canvas")
+        compose.onNodeWithText("Paper size").assertDoesNotExist()
+        compose.onNodeWithText("Squares").assertIsSelected()
+        screenshot("infinite-configured.png")
+        click("Standard pages")
+        compose.onNodeWithText("A5").assertIsSelected()
+        compose.onNodeWithText("Landscape").assertIsSelected()
+        compose.onNodeWithText("Automatically add next page").assertIsOff()
+        click("Paper layout")
+        screenshot("paper-choices.png")
+        compose.onNodeWithText("Create", useUnmergedTree = true).performClick()
+        compose.waitUntil(15000) { opened != null }
+        val notebook = runBlocking { repo.notebook(opened!!)!! }
+        val page = runBlocking { repo.firstPage(opened!!)!! }
+        assertFalse(notebook.autoMatchingPages)
+        assertEquals("A little room to think", notebook.title)
+        assertEquals(PaperTemplate("grid",595f,420f,5f,"normal",PaperColor.CREAM.argb), page.paperTemplate())
     }
 }

@@ -50,7 +50,7 @@ class EditorToolbarUiTest {
 
     private fun tap(description: String) {
         val node = compose.onNodeWithContentDescription(description)
-        if (description != "Close ink options") node.performScrollTo()
+        node.performScrollTo()
         node.performClick()
         saved()
     }
@@ -79,17 +79,20 @@ class EditorToolbarUiTest {
     }
 
     @Test fun pensOpenInkOptionsAndKeepTheirIndependentFractionalThicknesses() {
+        val canvasHeight = model.uiState.value.page!!.viewportHeight
         for ((tool, width) in listOf(InkTool.Pen to 3.25f, InkTool.BallPen to 1.75f, InkTool.Pencil to .375f)) {
             tap(tool.label)
-            compose.onNodeWithText("${tool.label} options").assertIsDisplayed()
+            compose.onNodeWithContentDescription("${tool.label} options").performScrollTo().assertIsDisplayed()
             compose.onNodeWithContentDescription("${tool.label} thickness")
                 .performSemanticsAction(SemanticsActions.SetProgress) { it(width) }
             tap("Ink color Blue")
             assertEquals(0xFF244C9A.toInt(), model.uiState.value.page!!.brushColor)
             saved()
             assertEquals(width, model.toolThickness(tool), .00001f)
+            assertEquals("Opening options must not shrink the canvas", canvasHeight, model.uiState.value.page!!.viewportHeight, .01f)
         }
         screenshot("pencil-options.png")
+        assertControlsInsideToolbar()
         tap("Eraser")
         compose.onNodeWithTag("Ink options").assertDoesNotExist()
         tap("Highlighter")
@@ -99,6 +102,68 @@ class EditorToolbarUiTest {
         compose.onNodeWithTag("Ink options").assertDoesNotExist()
         tap("Ball pen")
         assertEquals(1.75f, model.toolThickness(InkTool.BallPen), .00001f)
+    }
+
+    private fun assertControlsInsideToolbar() {
+        val bar = compose.onNodeWithTag("Editor toolbar").fetchSemanticsNode().boundsInRoot
+        val controls = compose.onNodeWithTag("Tool controls").fetchSemanticsNode().boundsInRoot
+        assertTrue("Tool controls must stay inside the original toolbar", controls.top >= bar.top && controls.bottom <= bar.bottom)
+    }
+
+    @Test fun pageCounterOpensPagePickerAndLayoutActionsLiveOnlyInSettings() {
+        compose.onNodeWithText("1/1").assertExists()
+        compose.onNodeWithText("Side by side").assertDoesNotExist()
+        compose.onNodeWithText("One below another").assertDoesNotExist()
+        settings(); menu("Add page")
+        compose.waitUntil(15000) { model.uiState.value.pages.size == 2 && !model.uiState.value.pageBusy }
+        saved()
+        compose.onNodeWithText("2/2").assertExists()
+        tap("Page navigation")
+        menu("Page 1")
+        compose.waitUntil(15000) { model.uiState.value.pageNumber == 1 && !model.uiState.value.pageBusy }
+        saved()
+        compose.onNodeWithText("1/2").assertExists()
+        settings()
+        compose.onNodeWithText("Side by side").performScrollTo().assertIsSelected()
+        menu("One below another")
+        compose.waitUntil(15000) { model.uiState.value.notebook!!.pageLayout == "vertical" }
+        saved()
+        compose.onNodeWithText("One below another").assertDoesNotExist()
+        settings(); menu("Duplicate page")
+        compose.waitUntil(15000) { model.uiState.value.pages.size == 3 && !model.uiState.value.pageBusy }
+        saved()
+        settings(); menu("Delete page")
+        compose.waitUntil(15000) { model.uiState.value.pages.size == 2 && !model.uiState.value.pageBusy }
+        saved()
+    }
+
+    @Test fun lassoReplacesInkControlsWithCopyCutPasteAndSelectionActions() {
+        tap("Pencil")
+        compose.onNodeWithTag("Ink options").assertExists()
+        tap("Lasso")
+        compose.onNodeWithTag("Ink options").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Cut").performScrollTo().assertIsNotEnabled()
+        compose.onNodeWithContentDescription("Paste").performScrollTo().assertIsNotEnabled()
+        compose.activityRule.scenario.onActivity { model.saveText(null, "Selection test", 24f, android.graphics.Color.BLACK, false, false) }
+        compose.waitUntil(15000) { model.uiState.value.objects.size == 1 }
+        saved()
+        tap("Copy 1")
+        assertEquals(2, model.uiState.value.objects.size)
+        tap("Cut")
+        assertEquals(1, model.uiState.value.objects.size)
+        assertTrue(model.uiState.value.selectedIds.isEmpty())
+        tap("Paste")
+        assertEquals(2, model.uiState.value.objects.size)
+        assertEquals("Selection test", model.uiState.value.objects.last().toContentObject()!!.text)
+        assertControlsInsideToolbar()
+        screenshot("lasso-actions.png")
+        tap("Delete selection")
+        assertEquals(1, model.uiState.value.objects.size)
+        tap("Undo")
+        assertEquals(2, model.uiState.value.objects.size)
+        tap("Pencil")
+        compose.onNodeWithContentDescription("Content editing").assertDoesNotExist()
+        compose.onNodeWithTag("Ink options").assertExists()
     }
 
     @Test fun settingsContainInsertAndPaperActionsAndApplyAllFourPageTypes() {

@@ -3,9 +3,7 @@ package com.ramst.notein.editor
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -23,37 +21,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
-
-@Composable
-internal fun ContentToolbar(
-    state: EditorUiState,
-    onCopy: () -> Unit,
-    onDelete: () -> Unit,
-    onEditText: () -> Unit,
-    onClear: () -> Unit,
-) {
-    val ready = !state.pageBusy && state.pendingInk == 0
-    val selected = state.objects.filter { it.id in state.selectedIds }
-    if (selected.isEmpty() && !state.lassoEnabled) return
-    LazyRow(modifier = Modifier.semantics { contentDescription = "Content editing" }, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        item { Spacer(Modifier.width(8.dp)) }
-        if (selected.isNotEmpty()) {
-            item { TextButton(enabled = ready, onClick = onCopy) { Text("Copy ${selected.size}") } }
-            item { TextButton(enabled = ready, onClick = onDelete) { Text("Delete selection") } }
-            if (selected.size == 1 && selected.first().type == TEXT_OBJECT_TYPE) {
-                item { TextButton(enabled = ready, onClick = onEditText) { Text("Edit text") } }
-            }
-            item { TextButton(enabled = ready, onClick = onClear) { Text("Clear selection") } }
-        } else if (state.lassoEnabled) {
-            item { Text("Draw around objects · drag selection · drag a corner to resize", style = MaterialTheme.typography.labelSmall) }
-        }
-        item { Spacer(Modifier.width(8.dp)) }
-    }
-}
 
 @Composable
 internal fun TextBoxDialog(
