@@ -69,15 +69,18 @@ internal fun EditorToolbar(
     onDeleteSelection: () -> Unit,
     onEditText: () -> Unit,
     onClear: () -> Unit,
+    onInsert: (InsertKind) -> Unit,
+    onHeadingSelect: (ContentObject) -> Unit,
 ) {
     val page = state.page ?: return
     val activeTool = InkTool.fromStorage(page.activeTool)
-    val ready = !state.pageBusy && state.pendingInk == 0
+    val ready = !state.pageBusy && !state.hasPendingInput
     val saved = ready && !state.hasUnsavedChanges
     val locked = state.notebook?.viewportLocked == true
     var showInkOptions by rememberSaveable { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var showPageTypes by remember { mutableStateOf(false) }
+    var insertTab by remember { mutableStateOf(false) }
     val hasContext = state.lassoEnabled || showInkOptions
 
     Surface(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp)
@@ -117,10 +120,37 @@ internal fun EditorToolbar(
                             enabled = saved && state.preparedPdf == null, onClick = onPdf)
                         Box {
                             ToolbarIcon("Settings", R.drawable.ic_editor_settings,
-                                onClick = { showPageTypes = false; showSettings = true })
+                                onClick = { showPageTypes = false; insertTab = false; showSettings = true })
                             DropdownMenu(expanded = showSettings, onDismissRequest = { showSettings = false },
                                 modifier = Modifier.width(260.dp)) {
                                 fun runAction(action: () -> Unit) { showSettings = false; action() }
+                                Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    FilterChip(!insertTab, onClick = { insertTab = false }, label = { Text("Settings") },
+                                        modifier = Modifier.semantics { contentDescription = "Settings tab" })
+                                    FilterChip(insertTab, onClick = { insertTab = true }, label = { Text("Insert") },
+                                        modifier = Modifier.semantics { contentDescription = "Insert tab" })
+                                }
+                                HorizontalDivider()
+                                if (insertTab) {
+                                    InsertKind.entries.forEach { kind ->
+                                        DropdownMenuItem(text = { Text(kind.label) }, enabled = ready,
+                                            leadingIcon = { Icon(when (kind) {
+                                                InsertKind.SHAPE -> Icons.Outlined.Category
+                                                InsertKind.GRAPH -> Icons.Outlined.GridOn
+                                                InsertKind.HEADING -> Icons.Outlined.Title
+                                                InsertKind.TABLE -> Icons.Outlined.TableChart
+                                            }, null) }, onClick = { runAction { onInsert(kind) } })
+                                    }
+                                    val headings = state.objects.mapNotNull { it.toContentObject() }.filter { it.headingLevel != null }
+                                    if (headings.isNotEmpty()) {
+                                        HorizontalDivider()
+                                        Text("HEADINGS ON THIS PAGE", Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                                            style = MaterialTheme.typography.labelSmall)
+                                        headings.forEach { heading -> DropdownMenuItem(enabled = ready,
+                                            text = { Text("H${heading.headingLevel}  ${heading.text}", maxLines = 2, overflow = TextOverflow.Ellipsis) },
+                                            onClick = { runAction { onHeadingSelect(heading) } }) }
+                                    }
+                                } else {
                                 DropdownMenuItem(text = { Text("Add text") }, leadingIcon = { Icon(Icons.Outlined.TextFields, null) }, enabled = ready, onClick = { runAction(onText) })
                                 DropdownMenuItem(text = { Text("Add photo") }, leadingIcon = { Icon(Icons.Outlined.AddPhotoAlternate, null) }, enabled = ready, onClick = { runAction(onPhoto) })
                                 DropdownMenuItem(text = { Text("Image file") }, leadingIcon = { Icon(Icons.Outlined.Image, null) }, enabled = ready, onClick = { runAction(onImageFile) })
@@ -178,6 +208,7 @@ internal fun EditorToolbar(
                                     Switch(checked = page.fingerWriting, enabled = ready, onCheckedChange = onFingerWritingChange,
                                         modifier = Modifier.semantics { contentDescription = "Finger writing" })
                                 }
+                                }
                             }
                         }
                         ToolbarIcon("Export", R.drawable.ic_editor_export, enabled = saved && state.exportProgress == null, onClick = onExport)
@@ -207,7 +238,7 @@ internal fun EditorToolbar(
 @Composable
 private fun CompactPageNavigator(state: EditorUiState, onSelect: (String) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
-    val ready = !state.pageBusy && state.pendingInk == 0 && !state.hasUnsavedChanges
+    val ready = !state.pageBusy && !state.hasPendingInput && !state.hasUnsavedChanges
     Box {
         TextButton(onClick = { expanded = true }, modifier = Modifier.widthIn(min = 68.dp)
             .semantics { contentDescription = "Page navigation"; stateDescription = "Page ${state.pageNumber} of ${state.pages.size}" }) {
@@ -233,7 +264,7 @@ private fun SelectionActions(
     state: EditorUiState, onCopy: () -> Unit, onCut: () -> Unit, onPaste: () -> Unit,
     onDelete: () -> Unit, onEditText: () -> Unit, onClear: () -> Unit, scrollable: Boolean,
 ) {
-    val ready = !state.pageBusy && state.pendingInk == 0
+    val ready = !state.pageBusy && !state.hasPendingInput
     val selected = state.objects.filter { it.id in state.selectedIds }
     Row(Modifier.fillMaxWidth().then(if (scrollable) Modifier.horizontalScroll(rememberScrollState()) else Modifier)
         .semantics { contentDescription = "Content editing" },
@@ -242,8 +273,13 @@ private fun SelectionActions(
         ContextAction("Cut", Icons.Outlined.ContentCut, ready && selected.isNotEmpty(), onCut)
         ContextAction("Paste", Icons.Outlined.ContentPaste, ready && state.hasSelectionClipboard, onPaste)
         ContextAction("Delete", Icons.Outlined.DeleteOutline, ready && selected.isNotEmpty(), onDelete, "Delete selection")
-        if (selected.size == 1 && selected.first().type == TEXT_OBJECT_TYPE) {
-            ContextAction("Edit text", Icons.Outlined.Edit, ready, onEditText)
+        if (selected.size == 1 && selected.first().type in DIALOG_CONTENT_TYPES) {
+            val label = when (selected.first().type) {
+                TABLE_OBJECT_TYPE -> "Edit table"; SHAPE_OBJECT_TYPE -> "Edit shape"
+                GRAPH_OBJECT_TYPE -> "Edit graph"; HEADING_OBJECT_TYPE -> "Edit heading"
+                else -> "Edit text"
+            }
+            ContextAction(label, Icons.Outlined.Edit, ready, onEditText)
         }
         ContextAction("Clear", Icons.Outlined.Deselect, ready && selected.isNotEmpty(), onClear, "Clear selection")
     }
@@ -252,7 +288,7 @@ private fun SelectionActions(
 @Composable
 private fun ContextAction(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, enabled: Boolean,
     onClick: () -> Unit, description: String = label) {
-    Column(Modifier.width(54.dp).height(54.dp).clip(RoundedCornerShape(12.dp))
+    Column(Modifier.width(if (label.startsWith("Edit ")) 72.dp else 54.dp).height(54.dp).clip(RoundedCornerShape(12.dp))
         .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
         .semantics(mergeDescendants = true) { contentDescription = description },
         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {

@@ -122,11 +122,12 @@ internal class ContentRenderer(context: Context, private val invalidate: () -> U
         canvas.translate(content.transform.x.toFloat(), content.transform.y.toFloat())
         canvas.scale(content.transform.scale.toFloat(), content.transform.scale.toFloat())
         when (content.entity.type) {
-            TEXT_OBJECT_TYPE -> {
+            TEXT_OBJECT_TYPE, HEADING_OBJECT_TYPE -> {
                 val layout = layouts.get(content.entity.payload) ?: textLayout(content).also { layouts.put(content.entity.payload, it) }
                 canvas.translate(8f, 8f)
                 layout.draw(canvas)
             }
+            SHAPE_OBJECT_TYPE, GRAPH_OBJECT_TYPE, TABLE_OBJECT_TYPE -> drawStructuredContent(canvas, content)
             IMAGE_OBJECT_TYPE, PDF_OBJECT_TYPE -> {
                 val bitmap = (if (content.entity.type == PDF_OBJECT_TYPE) displayKeys[content.entity.id]
                     else content.assetId?.let { displayKeys[it] })?.let { bitmaps.get(it) }

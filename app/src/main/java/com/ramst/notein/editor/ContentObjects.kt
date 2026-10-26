@@ -7,7 +7,7 @@ import org.json.JSONObject
 internal const val TEXT_OBJECT_TYPE = "text_box_v1"
 internal const val IMAGE_OBJECT_TYPE = "image_v1"
 internal const val PDF_OBJECT_TYPE = "pdf_page_v1"
-internal val EDITABLE_CONTENT_TYPES = setOf(INK_STROKE_TYPE, TEXT_OBJECT_TYPE, IMAGE_OBJECT_TYPE, PDF_OBJECT_TYPE)
+internal val EDITABLE_CONTENT_TYPES = setOf(INK_STROKE_TYPE, TEXT_OBJECT_TYPE, IMAGE_OBJECT_TYPE, PDF_OBJECT_TYPE) + STRUCTURED_CONTENT_TYPES
 
 /** Uniform positive scale and translation, applied to immutable source coordinates. */
 internal data class ObjectTransform(val x: Double = 0.0, val y: Double = 0.0, val scale: Double = 1.0) {
@@ -38,6 +38,10 @@ internal data class ContentObject(
     val pdfSourceId: String? = null,
     val pdfPageIndex: Int? = null,
     val pdfPath: String? = null,
+    val headingLevel: Int? = null,
+    val shape: ShapeSpec? = null,
+    val graph: GraphSpec? = null,
+    val table: TableSpec? = null,
 ) {
     val bounds: InkBounds get() = transform.bounds(sourceBounds)
 }
@@ -61,12 +65,18 @@ internal fun EditableObjectEntity.toContentObject(): ContentObject? = runCatchin
         require(json.getInt("pdfPageIndex") >= 0 && json.getString("pdfPath").isNotBlank())
     }
     require(json.optDouble("fontSize",24.0).isFinite())
+    val headingLevel = if (type == HEADING_OBJECT_TYPE) json.getInt("headingLevel").also {
+        require(it in 1..6 && json.getString("text").isNotBlank())
+    } else null
     ContentObject(this, bounds, transform, json.optString("text", ""),
         json.optDouble("fontSize", 24.0).toFloat().coerceIn(8f, 144f), json.optInt("color", android.graphics.Color.BLACK),
         json.optBoolean("bold"), json.optBoolean("italic"), json.optString("assetId").takeIf { it.isNotBlank() },
         json.optString("pdfSourceId").takeIf { it.isNotBlank() },
         if (type == PDF_OBJECT_TYPE) json.getInt("pdfPageIndex") else null,
-        json.optString("pdfPath").takeIf { it.isNotBlank() })
+        json.optString("pdfPath").takeIf { it.isNotBlank() }, headingLevel,
+        if (type == SHAPE_OBJECT_TYPE) ShapeSpec.read(json) else null,
+        if (type == GRAPH_OBJECT_TYPE) GraphSpec.read(json) else null,
+        if (type == TABLE_OBJECT_TYPE) TableSpec.read(json) else null)
 }.getOrNull()
 
 internal fun transformContent(entity: EditableObjectEntity, pivotX: Float, pivotY: Float, dx: Float, dy: Float, factor: Float): EditableObjectEntity {

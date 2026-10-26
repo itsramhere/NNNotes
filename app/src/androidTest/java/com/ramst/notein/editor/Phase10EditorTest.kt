@@ -110,7 +110,7 @@ class Phase10EditorTest {
         main { model.redo(InkEditorController()) }; saved()
         main { model.setViewportLocked(false) }; await { !model.uiState.value.notebook!!.viewportLocked }
         main { model.updateViewport(30f, 40f, 2f) }; saved()
-        assertEquals(-70f, model.uiState.value.page!!.viewportX, 0f)
+        assertEquals(0f, model.uiState.value.page!!.viewportX, 0f)
     }
     @Test fun newPaperFitsCenteredAndZoomedVerticalScrollIsBoundedAndDurable() = runBlocking {
         main { model.resizeViewport(1000f, 700f) }; saved()

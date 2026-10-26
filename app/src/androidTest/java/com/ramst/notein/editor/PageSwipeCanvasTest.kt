@@ -16,6 +16,7 @@ class PageSwipeCanvasTest {
     private lateinit var scenario: ActivityScenario<MainActivity>
     private lateinit var canvas: InkCanvasView
     private val turns = mutableListOf<Int>()
+    private val scrolls = mutableListOf<PageScrollPosition>()
     @Before fun setup() {
         scenario = ActivityScenario.launch(MainActivity::class.java)
         scenario.onActivity { activity -> canvas = InkCanvasView(activity); activity.setContentView(canvas) }
@@ -33,7 +34,7 @@ class PageSwipeCanvasTest {
         canvas.setPageNavigation(layout, directions.map { direction ->
             PageNeighbor(direction, PageEntity("neighbor-$direction", "notebook", direction + 1, 0, 0,
                 pageWidth = 300f, pageHeight = canvas.height * 2f), emptyList(), null)
-        }) { turns += it }
+        }, onScroll = { scrolls += it }) { turns += it }
     }
     private fun drag(dx: Float, dy: Float, cancel: Boolean = false) {
         phase4Event(canvas, MotionEvent.ACTION_DOWN, finger(400f, 400f))
@@ -51,17 +52,21 @@ class PageSwipeCanvasTest {
             assertEquals(before, canvas.viewport())
         }
     }
-    @Test fun verticalTurnsOnlyAfterScrollingPastAnEdgeAndReversalRetractsOverscroll() {
+    @Test fun verticalScrollingKeepsItsExactOffsetAndReleasesWithoutSnapping() {
         scenario.onActivity {
             navigation(PageLayout.VERTICAL); canvas.setViewportLocked(true)
             drag(0f, -50f); assertTrue(turns.isEmpty()); assertEquals(-150f, canvas.viewport().second, 0f)
+            drag(0f, -canvas.height * 4f, cancel = true)
+            assertTrue(scrolls.isEmpty()); assertEquals(-150f, canvas.viewport().second, 0f)
             phase4Event(canvas, MotionEvent.ACTION_DOWN, finger(400f, 400f))
-            phase4Event(canvas, MotionEvent.ACTION_MOVE, finger(400f, -canvas.height * 3f))
-            phase4Event(canvas, MotionEvent.ACTION_MOVE, finger(400f, 400f))
-            phase4Event(canvas, MotionEvent.ACTION_UP, finger(400f, 400f))
-            assertTrue(turns.isEmpty()); assertEquals(-150f, canvas.viewport().second, 0f)
-            drag(0f, -canvas.height * 4f); assertEquals(listOf(1), turns)
-            drag(0f, canvas.height * 4f); assertEquals(listOf(1, -1), turns)
+            phase4Event(canvas, MotionEvent.ACTION_MOVE, finger(400f, 400f - canvas.height * 2f))
+            val beforeRelease = canvas.viewport()
+            phase4Event(canvas, MotionEvent.ACTION_UP, finger(400f, 400f - canvas.height * 2f))
+            assertEquals(beforeRelease, canvas.viewport())
+            assertEquals("neighbor-1", scrolls.single().pageId)
+            assertEquals(beforeRelease.second + canvas.height * 2f + 24f * canvas.resources.displayMetrics.density,
+                scrolls.single().viewportY, .01f)
+            assertTrue(turns.isEmpty())
             assertEquals(1f, canvas.viewport().third, 0f)
         }
     }
@@ -105,4 +110,51 @@ class PageSwipeCanvasTest {
             assertEquals(listOf(1), turns); assertEquals(0, strokes)
         }
     }
+
+    @Test fun zoomedPaperPansBothWaysWithAndWithoutLockInEitherPageLayout() {
+        scenario.onActivity {
+            for (layout in PageLayout.entries) for (locked in listOf(false, true)) {
+                canvas.setViewportLocked(false)
+                navigation(layout)
+                val paperWidth = canvas.width * .75f
+                val start = (canvas.width - paperWidth * 2f) / 2f
+                canvas.setDocument(false, "grid", paperWidth, canvas.height * 2f)
+                canvas.setEditorState(InkTool.Pen, android.graphics.Color.BLACK, 6f, false, start, -100f, 2f)
+                canvas.setViewportLocked(locked)
+                drag(-80f, 0f)
+                assertEquals("$layout locked=$locked: pan left", start - 80f, canvas.viewport().first, .01f)
+                drag(140f, 0f)
+                assertEquals("$layout locked=$locked: pan right", start + 60f, canvas.viewport().first, .01f)
+                drag(10000f, 0f)
+                assertEquals(0f, canvas.viewport().first, .01f)
+                drag(-10000f, 0f)
+                assertEquals(canvas.width - paperWidth * 2f, canvas.viewport().first, .01f)
+                val beforeCancel = canvas.viewport()
+                drag(80f, 0f, cancel = true)
+                assertEquals(beforeCancel, canvas.viewport())
+                assertEquals(2f, canvas.viewport().third, 0f)
+                assertTrue("Panning inside the paper must not change pages", turns.isEmpty())
+                assertTrue(scrolls.isEmpty())
+            }
+        }
+    }
+
+    @Test fun zoomedHorizontalPageTurnsRequireANewOutwardDragAtTheEdge() {
+        scenario.onActivity {
+            val paperWidth = canvas.width * .75f
+            canvas.setDocument(false, "grid", paperWidth, canvas.height * 2f)
+            canvas.setEditorState(InkTool.Pen, android.graphics.Color.BLACK, 6f, false,
+                (canvas.width - paperWidth * 2f) / 2f, -100f, 2f)
+            canvas.setViewportLocked(true)
+            drag(-10000f, 0f)
+            assertEquals(canvas.width - paperWidth * 2f, canvas.viewport().first, .01f)
+            assertTrue(turns.isEmpty())
+            drag(-400f, 0f)
+            assertEquals(listOf(1), turns)
+            canvas.setEditorState(InkTool.Pen, android.graphics.Color.BLACK, 6f, false, 0f, -100f, 2f)
+            drag(400f, 0f)
+            assertEquals(listOf(1, -1), turns)
+        }
+    }
+
 }

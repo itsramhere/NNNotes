@@ -108,7 +108,7 @@ internal class SelectionOverlay(context: Context) : View(context) {
                             PointF(end.x + 0.01f, end.y + 0.01f), PointF(end.x - 0.01f, end.y + 0.01f))
                         val hit = objects.asReversed().firstOrNull { contentIntersectsLasso(it, pointPolygon) }
                         onSelect?.invoke(hit?.id)
-                        if (hit?.type == TEXT_OBJECT_TYPE && hit.id == lastTapId && event.eventTime - lastTapTime < 400L) onEditText?.invoke(hit.id)
+                        if (hit?.type in DIALOG_CONTENT_TYPES && hit?.id == lastTapId && event.eventTime - lastTapTime < 400L) hit?.id?.let { onEditText?.invoke(it) }
                         lastTapId = hit?.id; lastTapTime = event.eventTime
                     }
                     currentGesture == Gesture.MOVE -> onTransform?.invoke(end.x - first.x, end.y - first.y, 1f)

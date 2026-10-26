@@ -84,6 +84,8 @@ internal fun EditorScreen(
     val context = LocalContext.current
     var showTextDialog by remember { mutableStateOf(false) }
     var editingTextId by remember { mutableStateOf<String?>(null) }
+    var insertKind by remember { mutableStateOf<InsertKind?>(null) }
+    var editingInsertId by remember { mutableStateOf<String?>(null) }
     var canvasExportRegion by remember { mutableStateOf<CanvasExportRegion?>(null) }
     var showCanvasExport by remember { mutableStateOf(false) }
     var showPagePaper by remember { mutableStateOf(false) }
@@ -109,9 +111,18 @@ internal fun EditorScreen(
         canvasExportRegion = null
         exportWholeNotebook = false
     }
-    val editText: (String) -> Unit = { id -> editingTextId = id; showTextDialog = true }
+    val editText: (String) -> Unit = { id ->
+        val type = state.objects.firstOrNull { it.id == id }?.type
+        val kind = when (type) {
+            SHAPE_OBJECT_TYPE -> InsertKind.SHAPE; GRAPH_OBJECT_TYPE -> InsertKind.GRAPH
+            HEADING_OBJECT_TYPE -> InsertKind.HEADING; TABLE_OBJECT_TYPE -> InsertKind.TABLE
+            else -> null
+        }
+        if (kind == null) { editingTextId = id; showTextDialog = true }
+        else { editingInsertId = id; insertKind = kind }
+    }
 
-    val cannotLeave = state.hasUnsavedChanges || state.pendingInk > 0 || state.pageBusy
+    val cannotLeave = state.hasUnsavedChanges || state.hasPendingInput || state.pageBusy
     val guardedNavigateUp: () -> Unit = {
         if (!cannotLeave) onNavigateUp()
     }
@@ -226,6 +237,13 @@ internal fun EditorScreen(
                     onDeleteSelection = viewModel::deleteSelection,
                     onEditText = { state.selectedIds.singleOrNull()?.let(editText) },
                     onClear = { viewModel.selectObject(null) },
+                    onInsert = { editingInsertId = null; insertKind = it },
+                    onHeadingSelect = { heading ->
+                        viewModel.setLassoEnabled(true)
+                        viewModel.selectObject(heading.entity.id)
+                        controller.centerOn((heading.bounds.left + heading.bounds.right) / 2f,
+                            (heading.bounds.top + heading.bounds.bottom) / 2f)
+                    },
                 )
                 InkSurface(
                     page = page,
@@ -244,12 +262,13 @@ internal fun EditorScreen(
                     onContentError = viewModel::showError,
                     previews = state.previews[page.id].orEmpty(),
                     pageLayout = PageLayout.fromStorage(state.notebook?.pageLayout.orEmpty()),
-                    neighbors = listOf(-1, 1).mapNotNull { direction ->
-                        state.pages.getOrNull(state.pageNumber - 1 + direction)?.let { neighbor ->
-                            PageNeighbor(direction, neighbor, state.pageObjects[neighbor.id].orEmpty(), neighbor.pdfSourceId?.let { state.pdfSources[it]?.localPath })
-                        }
+                    neighbors = state.pages.mapIndexedNotNull { index, neighbor ->
+                        val offset = index - (state.pageNumber - 1)
+                        if (offset == 0 || (PageLayout.fromStorage(state.notebook?.pageLayout.orEmpty()) == PageLayout.HORIZONTAL && kotlin.math.abs(offset) != 1)) null
+                        else PageNeighbor(offset, neighbor, state.pageObjects[neighbor.id].orEmpty(), neighbor.pdfSourceId?.let { state.pdfSources[it]?.localPath })
                     }.takeUnless { state.isInfinite }.orEmpty(),
                     onPageNavigate = viewModel::navigateByGesture,
+                    onPageScroll = viewModel::navigateByScroll,
                     inputEnabled = !state.pageBusy,
                     activeTool = InkTool.fromStorage(page.activeTool),
                     color = page.brushColor,
@@ -273,6 +292,7 @@ internal fun EditorScreen(
                     viewportLocked = state.notebook?.viewportLocked == true,
                     onViewportResized = viewModel::resizeViewport,
                     onPendingInkChanged = viewModel::onPendingInkChanged,
+                    onNavigationChanged = viewModel::onNavigationChanged,
                     modifier = Modifier.weight(1f),
                 )
             }
@@ -311,6 +331,19 @@ internal fun EditorScreen(
                 showTextDialog = false
             },
         )
+    }
+    val inserted = state.objects.firstOrNull { it.id == editingInsertId }?.toContentObject()
+    val dismissInsert: () -> Unit = { insertKind = null; editingInsertId = null }
+    when (insertKind) {
+        InsertKind.SHAPE -> ShapeDialog(inserted, dismissInsert) { viewModel.saveShape(editingInsertId, it); dismissInsert() }
+        InsertKind.GRAPH -> GraphDialog(inserted, dismissInsert) { viewModel.saveGraph(editingInsertId, it); dismissInsert() }
+        InsertKind.HEADING -> HeadingDialog(inserted, dismissInsert) { text, level, color ->
+            viewModel.saveHeading(editingInsertId, text, level, color); dismissInsert()
+        }
+        InsertKind.TABLE -> TableDialog(inserted, dismissInsert,
+            onSave = { viewModel.saveTable(editingInsertId, it); dismissInsert() },
+            onDelete = { editingInsertId?.let(viewModel::deleteInsertedObject); dismissInsert() })
+        null -> Unit
     }
     if (showCanvasExport) {
         CanvasExportDialog(
@@ -386,6 +419,7 @@ private fun InkSurface(
     pageLayout: PageLayout,
     neighbors: List<PageNeighbor>,
     onPageNavigate: (Int) -> Unit,
+    onPageScroll: (PageScrollPosition) -> Unit,
     inputEnabled: Boolean,
     activeTool: InkTool,
     color: Int,
@@ -409,6 +443,7 @@ private fun InkSurface(
     viewportLocked: Boolean,
     onViewportResized: (Float, Float) -> Unit,
     onPendingInkChanged: (Int) -> Unit,
+    onNavigationChanged: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -429,6 +464,7 @@ private fun InkSurface(
                 canvas.onViewportChanged = onViewportChanged
                 canvas.setViewportLocked(viewportLocked)
                 canvas.onPendingInkChanged = onPendingInkChanged
+                canvas.onNavigationChanged = onNavigationChanged
                 canvas.currentPageStrokes = currentPageStrokes
                 canvas.setPageId(pageId)
                 canvas.setContentObjects(objects, selectedIds, lassoEnabled, onLasso, onTransform, onSelectObject, onEditText, onContentError)
@@ -437,8 +473,8 @@ private fun InkSurface(
                 if (!isInfinite && (canvas.background as? android.graphics.drawable.ColorDrawable)?.color != workspaceColor)
                     canvas.setBackgroundColor(workspaceColor)
                 canvas.setPdfBackground(pdfSourcePath, page, onContentError)
+                canvas.setPageNavigation(pageLayout, neighbors, onPageScroll, onPageNavigate)
                 canvas.setEditorState(activeTool, color, thickness, fingerWriting, viewportX, viewportY, viewportScale)
-                canvas.setPageNavigation(pageLayout, neighbors, onPageNavigate)
             },
         )
         if (isInfinite) InfiniteOverview(page.paperTemplate(), previews, viewportX, viewportY, viewportScale, surfaceSize,

@@ -33,7 +33,7 @@ import com.ramst.notein.storage.PageLayout
 import kotlin.math.abs
 
 /** AndroidX Ink authoring with immutable, document-coordinate completed strokes. */
-internal class InkCanvasView(context: Context) : FrameLayout(context) {
+internal class InkCanvasView(context: Context, private val pagePreview: Boolean = false) : FrameLayout(context) {
     private val completedView = CompletedInkView(context)
     private var pdfView: PdfPageRenderer? = null
     private val inProgressView = InProgressStrokesView(context, null, 0)
@@ -83,6 +83,7 @@ internal class InkCanvasView(context: Context) : FrameLayout(context) {
     var onStrokeErased: ((InkStrokeRecord) -> Unit)? = null
     var onViewportChanged: ((Float, Float, Float) -> Unit)? = null
     var onPendingInkChanged: ((Int) -> Unit)? = null
+    var onNavigationChanged: ((Boolean) -> Unit)? = null
     var currentPageStrokes: ((String) -> List<InkStrokeRecord>)? = null
     var inputEnabled = true
     private var viewportLocked = false
@@ -90,35 +91,27 @@ internal class InkCanvasView(context: Context) : FrameLayout(context) {
     private var pageNeighbors: List<PageNeighbor> = emptyList()
     private val neighborViews = linkedMapOf<String, InkCanvasView>()
     private var onPageNavigate: ((Int) -> Unit)? = null
+    private var onPageScroll: ((PageScrollPosition) -> Unit)? = null
     private var pageSwipeOffset = 0f
     private var panTravelX = 0f
     private var panTravelY = 0f
-    private var panRawY = 0f
     private var panScaled = false
 
-    fun setPageNavigation(layout: PageLayout, neighbors: List<PageNeighbor>, onNavigate: (Int) -> Unit) {
+    fun setPageNavigation(layout: PageLayout, neighbors: List<PageNeighbor>,
+        onScroll: ((PageScrollPosition) -> Unit)? = null, onNavigate: (Int) -> Unit) {
         onPageNavigate = onNavigate
+        onPageScroll = onScroll
         if (pageLayout == layout && pageNeighbors == neighbors) return
         if (pageLayout != layout) cancelPan()
         pageLayout = layout
         pageNeighbors = neighbors
-        val ids = neighbors.map { it.page.id }.toSet()
-        neighborViews.keys.filter { it !in ids }.forEach { id -> neighborViews.remove(id)?.let { removeView(it) } }
-        neighbors.forEach { neighbor ->
-            val view = neighborViews.getOrPut(neighbor.page.id) {
-                InkCanvasView(context).also { it.inputEnabled = false; addView(it, 0, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)) }
-            }
-            val page = neighbor.page
-            view.setPageId(page.id)
-            view.setDocument(false, page.paperBackground, page.pageWidth, page.pageHeight,
-                page.paperSpacingMm, page.paperPatternWeight, page.paperBackgroundColor)
-            view.setBackgroundColor(android.graphics.Color.TRANSPARENT)
-            view.setContentObjects(neighbor.objects, emptySet(), false, {}, { _, _, _ -> }, {}, {}, {})
-            view.setStoredStrokes(neighbor.objects.mapNotNull { it.toInkStrokeRecord() })
-            view.setPdfBackground(neighbor.pdfPath, page) {}
-        }
         renderCompleted()
     }
+
+    private val pageGap get() = 24f * resources.displayMetrics.density
+    private fun verticalOffsets() = verticalPageOffsets(pageHeight, viewportScale, pageGap, pageNeighbors)
+    private fun horizontalOffset() = viewportX - (width - pageWidth * viewportScale) / 2f
+    private fun scrollPosition(pageId: String, y: Float) = PageScrollPosition(pageId, y, viewportScale, horizontalOffset())
 
     private fun layoutPageStrip() {
         val extent = if (pageLayout == PageLayout.HORIZONTAL) width else height
@@ -131,20 +124,33 @@ internal class InkCanvasView(context: Context) : FrameLayout(context) {
                 android.graphics.Rect(kotlin.math.floor(viewportX).toInt(), kotlin.math.floor(viewportY).toInt(),
                     ceil(viewportX + pageWidth * viewportScale).toInt(), ceil(viewportY + pageHeight * viewportScale).toInt()) else null
         }
-        val gap = 24f * resources.displayMetrics.density
-        pageNeighbors.forEach { neighbor ->
-            val view = neighborViews[neighbor.page.id] ?: return@forEach
-            view.setEditorState(InkTool.Pen, android.graphics.Color.BLACK, 6f, false, 0f, 0f, viewportScale)
-            val (x, y, _) = view.viewport()
-            if (pageLayout == PageLayout.HORIZONTAL) {
-                view.translationX = shiftX + if (neighbor.direction > 0) viewportX + pageWidth * viewportScale + gap - x
-                    else viewportX - gap - x - neighbor.page.pageWidth * viewportScale
-                view.translationY = 0f
-            } else {
-                view.translationX = 0f
-                view.translationY = shiftY + if (neighbor.direction > 0) viewportY + pageHeight * viewportScale + gap - y
-                    else viewportY - gap - y - neighbor.page.pageHeight * viewportScale
+        val offsets = if (pageLayout == PageLayout.VERTICAL) verticalOffsets() else emptyMap()
+        val positions = pageNeighbors.map { neighbor ->
+            val x = if (pageLayout == PageLayout.VERTICAL) (width - neighbor.page.pageWidth * viewportScale) / 2f + horizontalOffset()
+                else shiftX + if (neighbor.direction > 0) viewportX + pageWidth * viewportScale + pageGap
+                    else viewportX - pageGap - neighbor.page.pageWidth * viewportScale
+            val y = if (pageLayout == PageLayout.VERTICAL) viewportY + offsets.getValue(neighbor.page.id) else viewportY
+            Triple(neighbor, x, y)
+        }.filter { (neighbor, x, y) -> !infiniteCanvas && x < width && x + neighbor.page.pageWidth * viewportScale > 0f &&
+            y < height && y + neighbor.page.pageHeight * viewportScale > 0f }
+        val ids = positions.map { it.first.page.id }.toSet()
+        neighborViews.keys.filter { it !in ids }.forEach { id -> neighborViews.remove(id)?.let { removeView(it) } }
+        positions.forEach { (neighbor, x, y) ->
+            val view = neighborViews.getOrPut(neighbor.page.id) {
+                InkCanvasView(context, pagePreview = true).also {
+                    it.inputEnabled = false
+                    addView(it, 0, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+                }
             }
+            val page = neighbor.page
+            view.setPageId(page.id)
+            view.setDocument(false, page.paperBackground, page.pageWidth, page.pageHeight,
+                page.paperSpacingMm, page.paperPatternWeight, page.paperBackgroundColor)
+            view.setBackgroundColor(android.graphics.Color.TRANSPARENT)
+            view.setContentObjects(neighbor.objects, emptySet(), false, {}, { _, _, _ -> }, {}, {}, {})
+            view.setStoredStrokes(neighbor.objects.mapNotNull { it.toInkStrokeRecord() })
+            view.setPdfBackground(neighbor.pdfPath, page) {}
+            view.setEditorState(InkTool.Pen, android.graphics.Color.BLACK, 6f, false, x, y, viewportScale)
         }
     }
 
@@ -384,10 +390,19 @@ internal class InkCanvasView(context: Context) : FrameLayout(context) {
     }
 
     private fun renderCompleted() {
-        if (documentConfigured && !infiniteCanvas && width > 0 && height > 0 && pageWidth > 0f && pageHeight > 0f) {
-            val (x, y, _) = centeredPaperViewport(viewportY, viewportScale, width.toFloat(), height.toFloat(), pageWidth, pageHeight)
-            viewportX = x
-            viewportY = y
+        if (!pagePreview && documentConfigured && !infiniteCanvas && width > 0 && height > 0 && pageWidth > 0f && pageHeight > 0f) {
+            val stripWidth = if (pageLayout == PageLayout.VERTICAL)
+                maxOf(pageWidth, pageNeighbors.maxOfOrNull { it.page.pageWidth } ?: pageWidth) else pageWidth
+            viewportX = boundedPaperX(viewportX, viewportScale, width.toFloat(), pageWidth, stripWidth)
+            if (pageLayout == PageLayout.VERTICAL) {
+                val offsets = verticalOffsets()
+                val first = minOf(0f, offsets.values.minOrNull() ?: 0f)
+                val last = maxOf(pageHeight * viewportScale, pageNeighbors.maxOfOrNull {
+                    offsets.getValue(it.page.id) + it.page.pageHeight * viewportScale
+                } ?: 0f)
+                viewportY = if (last - first <= height) (height - last - first) / 2f
+                    else viewportY.coerceIn(height - last, -first)
+            } else viewportY = boundedPaperViewport(viewportX, viewportY, viewportScale, width.toFloat(), height.toFloat(), pageWidth, pageHeight).second
         }
         completedView.setStrokes(completed.values.toList(),
             viewportX, viewportY, viewportScale, infiniteCanvas, paperBackground, pageWidth, pageHeight)
@@ -409,7 +424,11 @@ internal class InkCanvasView(context: Context) : FrameLayout(context) {
                     val (x, y, scale) = adjacent.viewport()
                     event.x in (x + adjacent.translationX)..(x + adjacent.translationX + neighbor.page.pageWidth * scale) &&
                         event.y in (y + adjacent.translationY)..(y + adjacent.translationY + neighbor.page.pageHeight * scale)
-                }?.let { onPageNavigate?.invoke(it.direction) }
+                }?.let { neighbor ->
+                    if (pageLayout == PageLayout.VERTICAL) onPageScroll?.invoke(scrollPosition(neighbor.page.id,
+                        viewportY + verticalOffsets().getValue(neighbor.page.id)))
+                    else onPageNavigate?.invoke(neighbor.direction)
+                }
                 return true
             }
         }
@@ -501,18 +520,22 @@ internal class InkCanvasView(context: Context) : FrameLayout(context) {
                                 pageSwipeOffset = 0f
                             } else if (pageLayout == PageLayout.HORIZONTAL) {
                                 viewportY += dy
-                                pageSwipeOffset = if (abs(panTravelX) > abs(panTravelY) * 1.2f) panTravelX else 0f
+                                val scaledWidth = pageWidth * viewportScale
+                                // A drag within zoomed paper pans it. Start a new outward drag at an edge to turn the page.
+                                val startsAtEdge = scaledWidth <= width + .5f ||
+                                    if (panTravelX > 0f) panStartX >= -.5f else panStartX <= width - scaledWidth + .5f
+                                viewportX = panStartX + panTravelX
+                                pageSwipeOffset = if (startsAtEdge && abs(panTravelX) > abs(panTravelY) * 1.2f) panTravelX else 0f
                             } else {
-                                panRawY += dy
-                                viewportY = panRawY
-                                renderCompleted()
-                                pageSwipeOffset = if (abs(panTravelY) > abs(panTravelX) * 1.2f) panRawY - viewportY else 0f
+                                viewportX += dx
+                                viewportY += dy
+                                pageSwipeOffset = 0f
                             }
                             val direction = if (pageSwipeOffset < 0f) 1 else -1
                             if (pageNeighbors.none { it.direction == direction }) pageSwipeOffset = 0f
                             renderCompleted()
                         } else if (scaleDetector.isInProgress) {
-                            panScaled = true; pageSwipeOffset = 0f; panRawY = viewportY
+                            panScaled = true; pageSwipeOffset = 0f
                             renderCompleted()
                         }
                         lastX = x
@@ -561,6 +584,7 @@ internal class InkCanvasView(context: Context) : FrameLayout(context) {
                     if (remaining.isEmpty()) { onViewportChanged?.invoke(viewportX, viewportY, viewportScale); pageSwipeOffset = 0f; renderCompleted() }
                     publishPendingInk()
                     if (turn != 0) onPageNavigate?.invoke(turn)
+                    else if (remaining.isEmpty() && pageLayout == PageLayout.VERTICAL && !infiniteCanvas) settleVerticalPage()
                     InkTrace.log("pan committed viewport=$viewportX,$viewportY")
                 }
                 val remaining = (0 until event.pointerCount).filter { it != index && event.getToolType(it) == MotionEvent.TOOL_TYPE_FINGER }
@@ -636,9 +660,9 @@ internal class InkCanvasView(context: Context) : FrameLayout(context) {
 
     private fun publishPendingInk() {
         if (acceptingCallbacks) {
+            onNavigationChanged?.invoke(fingerPointerId != MotionEvent.INVALID_POINTER_ID)
             onPendingInkChanged?.invoke(selectionPending + activeStrokes.size +
-                (if (eraserPointerId != MotionEvent.INVALID_POINTER_ID) 1 else 0) +
-                (if (fingerPointerId != MotionEvent.INVALID_POINTER_ID) 1 else 0))
+                (if (eraserPointerId != MotionEvent.INVALID_POINTER_ID) 1 else 0))
         }
     }
 
@@ -662,8 +686,20 @@ internal class InkCanvasView(context: Context) : FrameLayout(context) {
         panStartX = viewportX
         panStartY = viewportY
         panStartScale = viewportScale
-        panTravelX = 0f; panTravelY = 0f; panRawY = viewportY; panScaled = false; pageSwipeOffset = 0f
+        panTravelX = 0f; panTravelY = 0f; panScaled = false; pageSwipeOffset = 0f
         publishPendingInk()
+    }
+
+    /** Change the editable sheet without moving the paper already on screen. */
+    private fun settleVerticalPage() {
+        val offsets = verticalOffsets()
+        val candidates = listOf(Triple(currentPageId, viewportY, pageHeight)) + pageNeighbors.map {
+            Triple(it.page.id, viewportY + offsets.getValue(it.page.id), it.page.pageHeight)
+        }
+        val target = candidates.maxWithOrNull(compareBy<Triple<String?, Float, Float>> {
+            (min(height.toFloat(), it.second + it.third * viewportScale) - max(0f, it.second)).coerceAtLeast(0f)
+        }.thenBy { -abs(it.second + it.third * viewportScale / 2f - height / 2f) }) ?: return
+        if (target.first != currentPageId) target.first?.let { onPageScroll?.invoke(scrollPosition(it, target.second)) }
     }
 
     private fun cancelPan() {

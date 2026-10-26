@@ -57,10 +57,12 @@ internal data class EditorUiState(
     val canRetry: Boolean = false,
     val hasUnsavedChanges: Boolean = false,
     val pendingInk: Int = 0,
+    val navigationInProgress: Boolean = false,
     val pageBusy: Boolean = true,
     val previews: Map<String, List<PreviewStroke>> = emptyMap(),
     val pageObjects: Map<String, List<EditableObjectEntity>> = emptyMap(),
 ) {
+    val hasPendingInput: Boolean get() = pendingInk > 0 || navigationInProgress
     val notebookType: NotebookType get() = NotebookType.fromStorage(notebook?.notebookType.orEmpty())
     val isInfinite: Boolean get() = notebookType == NotebookType.INFINITE
     val pageNumber: Int get() = (pages.indexOfFirst { it.id == page?.id } + 1).coerceAtLeast(1)
@@ -94,7 +96,7 @@ internal class EditorViewModel(
 
     fun preparePdf(uri: Uri, center: PointF) {
         val state = _uiState.value
-        if (state.pageBusy || state.hasUnsavedChanges || state.pendingInk > 0 || pdfImportJob?.isActive == true || state.preparedPdf != null) return
+        if (state.pageBusy || state.hasUnsavedChanges || state.hasPendingInput || pdfImportJob?.isActive == true || state.preparedPdf != null) return
         pdfImportTarget = state.page ?: return
         pdfImportCenter = center
         importingPdf = true
@@ -131,7 +133,7 @@ internal class EditorViewModel(
     fun confirmPdfImport(selected: Set<Int>) {
         val prepared = _uiState.value.preparedPdf ?: return
         val target = pdfImportTarget ?: return
-        if (confirmingPdf || selected.isEmpty() || _uiState.value.hasUnsavedChanges || _uiState.value.pendingInk > 0) return
+        if (confirmingPdf || selected.isEmpty() || _uiState.value.hasUnsavedChanges || _uiState.value.hasPendingInput) return
         confirmingPdf = true
         _uiState.update { it.copy(pageBusy = true, pdfImportProgress = "Inserting PDF pages…") }
         pdfImportJob = viewModelScope.launch {
@@ -216,10 +218,11 @@ internal class EditorViewModel(
         }
     }
 
-    private fun observePageObjects(pageId: String) {
+    private fun observePageObjects(pageId: String, initialObjects: List<EditableObjectEntity> = emptyList()) {
         objectsJob?.cancel()
         undoStack.clear(); redoStack.clear(); publishHistory()
-        _uiState.update { it.copy(strokes = emptyList(), objects = emptyList(), selectedIds = emptySet(), pendingInk = 0) }
+        _uiState.update { it.copy(strokes = initialObjects.mapNotNull { entity -> entity.toInkStrokeRecord() },
+            objects = initialObjects, selectedIds = emptySet(), pendingInk = 0, navigationInProgress = false) }
         objectsJob = viewModelScope.launch {
             try {
                 var loaded = false
@@ -273,7 +276,7 @@ internal class EditorViewModel(
 
     fun selectPage(pageId: String) {
         val target = _uiState.value.pages.firstOrNull { it.id == pageId } ?: return
-        if (_uiState.value.hasUnsavedChanges || _uiState.value.pendingInk > 0 || _uiState.value.pageBusy) {
+        if (_uiState.value.hasUnsavedChanges || _uiState.value.hasPendingInput || _uiState.value.pageBusy) {
             _uiState.update { it.copy(errorMessage = "Saving the current page. Select another page once saving finishes.") }
             return
         }
@@ -305,7 +308,7 @@ internal class EditorViewModel(
     /** A completed page gesture first commits the outgoing scroll and edits. */
     fun navigateByGesture(offset: Int) {
         val state = _uiState.value
-        if (state.isInfinite || state.pageBusy || state.pendingInk > 0 || offset !in listOf(-1, 1)) return
+        if (state.isInfinite || state.pageBusy || state.hasPendingInput || offset !in listOf(-1, 1)) return
         val target = state.pages.getOrNull(state.pageNumber - 1 + offset) ?: return
         pageTransitionBusy = true
         _uiState.update { it.copy(pageBusy = true) }
@@ -322,7 +325,7 @@ internal class EditorViewModel(
                         _uiState.value.notebook?.viewportLocked != true && destination.viewportScale == 1f)
                         destination.fitNewPaper(frame.viewportWidth, frame.viewportHeight)
                     else destination.copy(viewportWidth = frame.viewportWidth, viewportHeight = frame.viewportHeight)
-                    destination = destination.copy(viewportY = if (offset > 0) 0f else frame.viewportHeight - destination.pageHeight * destination.viewportScale).centeredOnPaper()
+                    destination = destination.copy(viewportY = if (offset > 0) 0f else frame.viewportHeight - destination.pageHeight * destination.viewportScale).boundedOnPaper()
                     repository.updateEditorState(destination)
                 }
                 _uiState.update { it.copy(page = destination, strokes = emptyList(), canRetry = false) }
@@ -333,14 +336,65 @@ internal class EditorViewModel(
         }
     }
 
+    /** Rebase a continuous strip on the visible page, preserving its exact screen position. */
+    fun navigateByScroll(position: PageScrollPosition) {
+        val state = _uiState.value
+        if (state.isInfinite || state.pageBusy || state.hasPendingInput ||
+            PageLayout.fromStorage(state.notebook?.pageLayout.orEmpty()) != PageLayout.VERTICAL ||
+            !position.viewportY.isFinite() || !position.horizontalOffset.isFinite() || !position.scale.isFinite() || position.scale !in MIN_ZOOM..MAX_ZOOM) return
+        val target = state.pages.firstOrNull { it.id == position.pageId } ?: return
+        val outgoing = state.page ?: return
+        if (target.id == outgoing.id) return
+        pageTransitionBusy = true
+        _uiState.update { it.copy(pageBusy = true) }
+        viewModelScope.launch {
+            try {
+                saveCurrentPageUntilClean()
+                if (_uiState.value.hasUnsavedChanges) {
+                    pageTransitionBusy = false
+                    _uiState.update { it.copy(pageBusy = false) }
+                    return@launch
+                }
+                val objects = repository.pageObjects(target.id).filter { it.type in EDITABLE_CONTENT_TYPES }
+                withContext(Dispatchers.Default) {
+                    check(objects.all { it.toContentObject() != null }) { "Saved content could not be decoded." }
+                }
+                val scale = state.notebook?.lockedZoomScale?.takeIf { state.notebook.viewportLocked } ?: position.scale
+                val destination = target.copy(viewportX = (outgoing.viewportWidth - target.pageWidth * scale) / 2f + position.horizontalOffset,
+                    viewportY = position.viewportY, viewportScale = scale,
+                    viewportWidth = outgoing.viewportWidth, viewportHeight = outgoing.viewportHeight)
+                repository.updateEditorState(destination)
+                repository.selectPage(notebookId, target.id)
+                selectedPageId = target.id
+                _uiState.update { it.copy(page = destination, strokes = objects.mapNotNull { entity -> entity.toInkStrokeRecord() },
+                    objects = objects, selectedIds = emptySet(), canRetry = false,
+                    pageObjects = it.pageObjects + (outgoing.id to state.objects)) }
+                pageTransitionBusy = false
+                observePageObjects(target.id, objects)
+            } catch (exception: CancellationException) { throw exception }
+            catch (_: Exception) {
+                pageTransitionBusy = false
+                _uiState.update { it.copy(pageBusy = false, errorMessage = "Could not change pages. Your current page is retained.") }
+            }
+        }
+    }
+
+    private fun paperViewport(page: PageEntity, notebook: NotebookEntity? = _uiState.value.notebook): PageEntity {
+        if (page.viewportWidth <= 0f || page.viewportHeight <= 0f) return page
+        return if (PageLayout.fromStorage(notebook?.pageLayout.orEmpty()) == PageLayout.VERTICAL) {
+            val stripWidth = maxOf(page.pageWidth, _uiState.value.pages.maxOfOrNull { it.pageWidth } ?: page.pageWidth)
+            page.copy(viewportX = boundedPaperX(page.viewportX, page.viewportScale, page.viewportWidth, page.pageWidth, stripWidth))
+        } else page.boundedOnPaper()
+    }
+
     private fun notebookZoom(page: PageEntity, notebook: NotebookEntity?): PageEntity {
         val scale = notebook?.lockedZoomScale?.takeIf { notebook.viewportLocked } ?: return page
         val updated = page.copy(viewportScale = scale)
-        return if (notebook.notebookType == NotebookType.INFINITE.storageValue) updated else updated.centeredOnPaper()
+        return if (notebook.notebookType == NotebookType.INFINITE.storageValue) updated else paperViewport(updated, notebook)
     }
 
     fun setPageLayout(layout: PageLayout) {
-        if (_uiState.value.pageBusy || _uiState.value.pendingInk > 0) return
+        if (_uiState.value.pageBusy || _uiState.value.hasPendingInput) return
         viewModelScope.launch {
             try {
                 repository.setPageLayout(notebookId, layout)
@@ -371,7 +425,7 @@ internal class EditorViewModel(
     }
     fun selectBackground(background: PaperBackground) {
         val page = _uiState.value.page ?: return
-        if (_uiState.value.isInfinite || _uiState.value.pageBusy || _uiState.value.pendingInk > 0) return
+        if (_uiState.value.isInfinite || _uiState.value.pageBusy || _uiState.value.hasPendingInput) return
         _uiState.update { it.copy(pageBusy = true) }
         viewModelScope.launch {
             try {
@@ -385,7 +439,7 @@ internal class EditorViewModel(
     }
     fun updateCurrentPageTemplate(template: com.ramst.notein.storage.PaperTemplate) {
         val page = _uiState.value.page ?: return
-        if (page.pdfPageIndex != null || _uiState.value.pageBusy || _uiState.value.pendingInk > 0) return
+        if (page.pdfPageIndex != null || _uiState.value.pageBusy || _uiState.value.hasPendingInput) return
         viewModelScope.launch {
             try {
                 repository.updatePageTemplate(page.id, template)
@@ -408,7 +462,7 @@ internal class EditorViewModel(
     }
 
     fun selectTool(tool: InkTool) {
-        if (_uiState.value.pendingInk > 0 || _uiState.value.pageBusy) return
+        if (_uiState.value.hasPendingInput || _uiState.value.pageBusy) return
         _uiState.update { it.copy(lassoEnabled = false, selectedIds = emptySet()) }
         updatePageState { it.copy(activeTool = tool.storageValue, brushSize = toolThickness(tool)) }
     }
@@ -416,7 +470,7 @@ internal class EditorViewModel(
         else _uiState.value.toolThicknesses[tool.storageValue] ?: tool.defaultSize
 
     fun setViewportLocked(locked: Boolean) {
-        if (_uiState.value.pageBusy || _uiState.value.pendingInk > 0) return
+        if (_uiState.value.pageBusy || _uiState.value.hasPendingInput) return
         pageTransitionBusy = true
         _uiState.update { it.copy(pageBusy = true) }
         viewModelScope.launch {
@@ -435,7 +489,7 @@ internal class EditorViewModel(
         }
     }
     fun setLassoEnabled(enabled: Boolean) {
-        if (_uiState.value.pageBusy || _uiState.value.pendingInk > 0) return
+        if (_uiState.value.pageBusy || _uiState.value.hasPendingInput) return
         _uiState.update { it.copy(lassoEnabled = enabled, selectedIds = emptySet()) }
     }
     fun selectLasso(polygon: List<PointF>) {
@@ -510,6 +564,52 @@ internal class EditorViewModel(
         _uiState.update { it.copy(lassoEnabled = true, selectedIds = setOf(entity.id)) }
     }
 
+    fun saveShape(existingId: String?, shape: ShapeSpec) = saveStructured(existingId, SHAPE_OBJECT_TYPE, shape.json())
+    fun saveGraph(existingId: String?, graph: GraphSpec) = saveStructured(existingId, GRAPH_OBJECT_TYPE, graph.json())
+    fun saveTable(existingId: String?, table: TableSpec) = saveStructured(existingId, TABLE_OBJECT_TYPE, table.json())
+    fun saveHeading(existingId: String?, text: String, level: Int, color: Int) {
+        if (text.isBlank() || level !in 1..6) return
+        val old = _uiState.value.objects.firstOrNull { it.id == existingId && it.type == HEADING_OBJECT_TYPE }
+        val width = old?.let { JSONObject(it.payload).getDouble("width").toFloat() } ?: 320f
+        val json = JSONObject().put("width", width).put("height", 100f).put("text", text.trim())
+            .put("headingLevel", level).put("fontSize", headingSize(level)).put("color", color).put("bold", true)
+        val sample = EditableObjectEntity("heading-preview", "preview", HEADING_OBJECT_TYPE, json.toString(), 0L, 0L)
+        json.put("height", maxOf(48, textLayout(requireNotNull(sample.toContentObject())).height + 16))
+        saveStructured(existingId, HEADING_OBJECT_TYPE, json)
+    }
+
+    private fun saveStructured(existingId: String?, type: String, json: JSONObject) {
+        if (!canEditContent()) return
+        val state = _uiState.value
+        val page = state.page ?: return
+        val existing = state.objects.firstOrNull { it.id == existingId && it.type == type }
+        // If a dialog outlives its object, never silently recreate it or overwrite another type.
+        if (existingId != null && existing == null) return
+        val width = json.getDouble("width").toFloat()
+        val height = json.getDouble("height").toFloat()
+        val transform = existing?.let { ObjectTransform.read(JSONObject(it.payload)) } ?: run {
+            val centerX = (page.viewportWidth / 2f - page.viewportX) / page.viewportScale
+            val centerY = (page.viewportHeight / 2f - page.viewportY) / page.viewportScale
+            val x = centerX - width / 2f
+            val y = centerY - height / 2f
+            ObjectTransform(if (state.isInfinite) x.toDouble() else x.coerceIn(0f, (page.pageWidth - width).coerceAtLeast(0f)).toDouble(),
+                if (state.isInfinite) y.toDouble() else y.coerceIn(0f, (page.pageHeight - height).coerceAtLeast(0f)).toDouble())
+        }
+        val now = nextInsertionTime()
+        val entity = EditableObjectEntity(existing?.id ?: UUID.randomUUID().toString(), page.id, type,
+            transform.write(json).toString(), existing?.createdAt ?: now, System.currentTimeMillis())
+        require(entity.toContentObject() != null) { "The inserted object has invalid settings." }
+        commitChange(listOfNotNull(existing), listOf(entity))
+        _uiState.update { it.copy(lassoEnabled = true, selectedIds = setOf(entity.id)) }
+    }
+
+    fun deleteInsertedObject(id: String) {
+        if (!canEditContent()) return
+        val existing = _uiState.value.objects.firstOrNull { it.id == id && it.type in STRUCTURED_CONTENT_TYPES } ?: return
+        commitChange(listOf(existing), emptyList())
+        _uiState.update { it.copy(selectedIds = it.selectedIds - id) }
+    }
+
     fun importImage(context: Context, uri: Uri) {
         if (!canEditContent()) return
         val page = _uiState.value.page ?: return
@@ -541,7 +641,7 @@ internal class EditorViewModel(
         }
     }
     private fun nextInsertionTime() = maxOf(System.currentTimeMillis(), (_uiState.value.objects.maxOfOrNull { it.createdAt } ?: 0L) + 1)
-    private fun canEditContent() = !_uiState.value.pageBusy && _uiState.value.pendingInk == 0 && _uiState.value.page != null
+    private fun canEditContent() = !_uiState.value.pageBusy && !_uiState.value.hasPendingInput && _uiState.value.page != null
     fun showError(message: String) { _uiState.update { it.copy(errorMessage = message) } }
 
     fun exportSelectedPage(context: Context, destination: Uri) {
@@ -559,7 +659,7 @@ internal class EditorViewModel(
     private fun startExport(context: Context, destination: Uri, work: suspend (PdfExporter, (ExportProgress) -> Unit) -> Unit) {
         if (exportJob?.isActive == true) return
         val state = _uiState.value
-        if (state.hasUnsavedChanges || state.pendingInk > 0 || state.pageBusy) {
+        if (state.hasUnsavedChanges || state.hasPendingInput || state.pageBusy) {
             showError("Wait for the current edits to finish saving before exporting.")
             runCatching { com.ramst.notein.pdf.discardPdfDestination(context, destination) }
             return
@@ -597,7 +697,7 @@ internal class EditorViewModel(
             val updated = page.copy(viewportX = x, viewportY = y,
                 viewportScale = if (_uiState.value.notebook?.viewportLocked == true) _uiState.value.notebook?.lockedZoomScale ?: page.viewportScale
                     else scale.coerceIn(MIN_ZOOM, MAX_ZOOM))
-            if (_uiState.value.isInfinite) updated else updated.centeredOnPaper()
+            if (_uiState.value.isInfinite) updated else paperViewport(updated)
         }
     }
 
@@ -606,7 +706,8 @@ internal class EditorViewModel(
         updatePageState { page ->
             val lockedScale = _uiState.value.notebook?.lockedZoomScale?.takeIf { _uiState.value.notebook?.viewportLocked == true }
             if (!_uiState.value.isInfinite && lockedScale != null && page.viewportWidth == 0f && page.viewportHeight == 0f) {
-                page.copy(viewportWidth = width, viewportHeight = height, viewportScale = lockedScale).centeredOnPaper()
+                paperViewport(page.copy(viewportWidth = width, viewportHeight = height, viewportScale = lockedScale,
+                    viewportX = (width - page.pageWidth * lockedScale) / 2f))
             } else if (!_uiState.value.isInfinite && page.pageWidth > 0f && page.pageHeight > 0f &&
                 page.viewportWidth == 0f && page.viewportHeight == 0f &&
                 page.viewportX == 0f && page.viewportY == 0f && page.viewportScale == 1f) {
@@ -615,13 +716,17 @@ internal class EditorViewModel(
                 val resized = page.copy(viewportX = page.viewportX + if (page.viewportWidth > 0f) (width - page.viewportWidth) / 2f else 0f,
                 viewportY = page.viewportY + if (page.viewportHeight > 0f) (height - page.viewportHeight) / 2f else 0f,
                 viewportWidth = width, viewportHeight = height)
-                if (_uiState.value.isInfinite) resized else resized.centeredOnPaper()
+                if (_uiState.value.isInfinite) resized else paperViewport(resized)
             }
         }
     }
 
+    fun onNavigationChanged(active: Boolean) {
+        _uiState.update { it.copy(navigationInProgress = active) }
+    }
     fun onPendingInkChanged(count: Int) { _uiState.update { it.copy(pendingInk = count, saveMessage = when {
-        it.canRetry -> it.saveMessage; it.hasUnsavedChanges -> "Saving…"; count > 0 -> "Finishing ink…"; else -> "Saved" }) } }
+        it.canRetry -> it.saveMessage; it.hasUnsavedChanges -> "Saving…"; count > 0 -> "Finishing ink…"; else -> "Saved" }) }
+    }
     fun onStrokeCommitted(record: InkStrokeRecord) {
         if (record.pageId == _uiState.value.page?.id) commitChange(emptyList(), listOf(record.toEntity()))
     }
@@ -675,10 +780,11 @@ internal class EditorViewModel(
         recordAction(action); applyAction(action, true)
     }
     private fun updatePageState(transform: (PageEntity) -> PageEntity) { if (_uiState.value.pageBusy) return; val updated = _uiState.value.page?.let(transform) ?: return; if (updated != _uiState.value.page) { _uiState.update { it.copy(page = updated) }; requestSave() } }
+
     private fun requestSave() { revision++; _uiState.update { it.copy(hasUnsavedChanges = true, saveMessage = "Saving…", errorMessage = null) }; saveRequests.trySend(Unit) }
     private fun runPageChange(change: suspend (NotebookType) -> Unit) {
         if (_uiState.value.isInfinite) return
-        if (_uiState.value.hasUnsavedChanges || _uiState.value.pendingInk > 0 || _uiState.value.pageBusy) { _uiState.update { it.copy(errorMessage = "Wait for the current page to finish saving before changing pages.") }; return }
+        if (_uiState.value.hasUnsavedChanges || _uiState.value.hasPendingInput || _uiState.value.pageBusy) { _uiState.update { it.copy(errorMessage = "Wait for the current page to finish saving before changing pages.") }; return }
         pageTransitionBusy = true
         _uiState.update { it.copy(pageBusy = true) }
         viewModelScope.launch {

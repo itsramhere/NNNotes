@@ -205,10 +205,18 @@ class PdfExporter(
                     inkRenderer.draw(canvas, decoded.stroke, matrix)
                     canvas.restore()
                 }
-                TEXT_OBJECT_TYPE -> requireNotNull(entity.toContentObject()) { "A text annotation could not be decoded." }.let { content ->
+                TEXT_OBJECT_TYPE, com.ramst.notein.editor.HEADING_OBJECT_TYPE -> requireNotNull(entity.toContentObject()) { "A text annotation could not be decoded." }.let { content ->
                     canvas.save(); canvas.translate((content.transform.x.toFloat() + offsetX) * scale, (content.transform.y.toFloat() + offsetY) * scale)
                     canvas.scale(content.transform.scale.toFloat() * scale, content.transform.scale.toFloat() * scale)
                     canvas.translate(8f, 8f); textLayout(content).draw(canvas); canvas.restore()
+                }
+                com.ramst.notein.editor.SHAPE_OBJECT_TYPE, com.ramst.notein.editor.GRAPH_OBJECT_TYPE,
+                com.ramst.notein.editor.TABLE_OBJECT_TYPE -> requireNotNull(entity.toContentObject()).let { content ->
+                    canvas.save()
+                    canvas.translate((content.transform.x.toFloat() + offsetX) * scale, (content.transform.y.toFloat() + offsetY) * scale)
+                    canvas.scale(content.transform.scale.toFloat() * scale, content.transform.scale.toFloat() * scale)
+                    com.ramst.notein.editor.drawStructuredContent(canvas, content)
+                    canvas.restore()
                 }
                 IMAGE_OBJECT_TYPE -> requireNotNull(entity.toContentObject()) { "An image annotation could not be decoded." }.let { content ->
                     val bitmap = requireNotNull(content.assetId?.let { BitmapFactory.decodeFile(assets.preview(it).absolutePath) }) { "An image is unavailable. Export was not completed." }

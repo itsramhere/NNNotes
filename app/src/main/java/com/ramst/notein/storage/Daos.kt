@@ -95,6 +95,7 @@ interface EditorDao {
 
     @Query("UPDATE pages SET viewport_width = :width, viewport_height = :height WHERE id = :pageId")
     suspend fun setViewportBounds(pageId: String, width: Float, height: Float)
+
     @Transaction
     suspend fun exportSnapshot(notebookId: String, pageIds: List<String>): List<Pair<PageEntity, List<EditableObjectEntity>>> {
         val available = pages(notebookId).associateBy { it.id }
@@ -196,7 +197,7 @@ interface EditorDao {
     /** Reconcile the editor's complete supported content; retain unknown future types. */
     @Transaction
     suspend fun saveContentSnapshot(objects: List<EditableObjectEntity>, state: PageEntity, updatedAt: Long): Boolean {
-        val supportedTypes = setOf("ink_stroke_v1", "text_box_v1", "image_v1", "pdf_page_v1")
+        val supportedTypes = com.ramst.notein.editor.EDITABLE_CONTENT_TYPES
         require(objects.all { it.pageId == state.id && it.type in supportedTypes })
         require(objects.map { it.id }.distinct().size == objects.size)
         check(page(state.id)?.notebookId == state.notebookId) { "The page no longer exists." }

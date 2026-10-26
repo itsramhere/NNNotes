@@ -10,11 +10,20 @@ captures/
 *.apks
 *.apkm
 *.hprof
+*.dmp
+*.trace
+*.systrace
+*.perfetto-trace
+*.perfetto-trace.gz
 hs_err_pid*
 replay_pid*
 
 # Machine-specific SDKs and configuration
 /.tools/
+/.android/
+/.adb/
+adbkey
+adbkey.pub
 local.properties
 *.jks
 *.keystore
@@ -36,7 +45,7 @@ Desktop.ini
 *.swo
 *~
 
-# Local notebook databases, device exports and backups
+# Private notebook databases, device exports and rollback backups
 *.db
 *.db-*
 *.sqlite
@@ -48,6 +57,11 @@ Desktop.ini
 /device-dumps/
 /artifacts/
 /screenrecordings/
+/tablet-data*.tar
+/tablet-database*.tar
+/rollback-*.tar
+/rollback-*.tar.gz
+/rollback-*.zip
 
 # Scratch files and generated verification artifacts
 /tmp/

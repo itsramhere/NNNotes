@@ -12,7 +12,7 @@ import com.ramst.notein.storage.EditableObjectEntity
 
 /** Built off the UI thread. Immutable preview geometry is reused during navigation. */
 internal data class PreviewStroke(val points: List<Offset>, val color: Int, val width: Float, val bounds: InkBounds,
-    val stroke: androidx.ink.strokes.Stroke? = null)
+    val stroke: androidx.ink.strokes.Stroke? = null, val content: ContentObject? = null)
 
 internal fun InkStrokeRecord.toPreview(): PreviewStroke? = decode()?.let { decoded ->
     val inputs = decoded.stroke.inputs
@@ -27,7 +27,8 @@ internal fun EditableObjectEntity.toContentPreview(): PreviewStroke? {
     val bounds = content.bounds
     return PreviewStroke(listOf(Offset(bounds.left, bounds.top), Offset(bounds.right, bounds.top),
         Offset(bounds.right, bounds.bottom), Offset(bounds.left, bounds.bottom), Offset(bounds.left, bounds.top)),
-        if (type == TEXT_OBJECT_TYPE) content.color else 0xFF697A8C.toInt(), 1f, bounds)
+        if (type == TEXT_OBJECT_TYPE || type == HEADING_OBJECT_TYPE) content.color else 0xFF697A8C.toInt(), 1f, bounds,
+        content = content.takeIf { type in STRUCTURED_CONTENT_TYPES })
 }
 
 internal data class OverviewGeometry(val world: InkBounds, val viewport: InkBounds, val factor: Float) {
@@ -49,6 +50,17 @@ internal fun overviewGeometry(previews: List<PreviewStroke>, x: Float, y: Float,
 internal fun DrawScope.drawPreview(previews: List<PreviewStroke>, factor: Float, origin: Offset = Offset.Zero) {
     val renderer = androidx.ink.rendering.android.canvas.CanvasStrokeRenderer.create()
     previews.forEach { ink ->
+        ink.content?.let { content ->
+            val native = drawContext.canvas.nativeCanvas
+            native.save()
+            native.translate((content.transform.x.toFloat() - origin.x) * factor, (content.transform.y.toFloat() - origin.y) * factor)
+            native.scale(content.transform.scale.toFloat() * factor, content.transform.scale.toFloat() * factor)
+            if (content.entity.type == HEADING_OBJECT_TYPE) {
+                native.translate(8f, 8f); textLayout(content).draw(native)
+            } else drawStructuredContent(native, content)
+            native.restore()
+            return@forEach
+        }
         if (ink.stroke != null) {
             val native = drawContext.canvas.nativeCanvas
             native.save()

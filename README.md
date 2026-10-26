@@ -11,6 +11,7 @@ A local-first Android notebook app built with Kotlin, Jetpack Compose, AndroidX 
 - Stylus input, optional finger writing, pan, pinch zoom, and persistent zoom lock.
 - Lasso selection, copy, cut, paste, move, resize, delete, and undo/redo for mixed content.
 - Editable text boxes and photo or image-file imports.
+- Insertable shapes, maths coordinate graphs, H1-H6 headings, and editable tables.
 - Blank, lined, grid, and dotted paper with page-specific and notebook defaults.
 - Page creation, duplication, deletion, previews, and horizontal or vertical navigation.
 - Local PDF import, annotations, page/notebook export, and infinite-canvas region export.
@@ -49,7 +50,24 @@ Tap a pen, pencil, or highlighter to show its colours, thickness slider, and str
 
 A compact **1/x** counter opens the page picker. Settings contains page layout (Side by side or One below another), fit, add/duplicate/delete page, text and image insertion, paper options, and finger writing. Actions that do not apply to the current page are disabled. On narrower tablets the tool list scrolls; on phones the whole toolbar can be swiped horizontally.
 
+**One below another** scrolls as a continuous strip: parts of the preceding and following pages stay visible across the page gaps. Releasing the scroll keeps the paper in place and selects the most visible page for editing. Mixed paper sizes share the same zoom, and a single drag can cross several pages.
+
+Finger scrolling and pinching do not show **Finishing ink**. Completed viewport changes use normal autosave and may briefly show **Saving** before returning to **Saved**.
+
+When zoomed paper is wider than the screen, drag left or right to pan across it in either page layout. **Lock zoom** keeps the magnification fixed while allowing panning in both directions. The horizontal position is saved with the page and retained through vertical page transitions. Paper stays centred when the page strip fits the screen. In **Side by side**, pan to a paper edge, then start a new outward drag to turn the page.
+
 Copy retains the existing immediate-duplicate behaviour and also makes the selection available to Paste. Cut and Paste work within the open notebook, including across its pages, and participate in Undo/Redo. The selection clipboard lasts for the current notebook session.
+
+## Insert shapes, graphs, headings, and tables
+
+Open **Settings > Insert** to choose:
+
+- **Shape:** square, rectangle, triangle, right triangle, circle, ellipse, diamond, line, or arrow. Adjust dimensions, colour, outline width, and fill.
+- **Graph:** maths coordinate axes with X/Y ranges, fractional grid steps, optional grid and number labels, and adjustable size. Write on the graph using any pen tool.
+- **Heading:** choose H1-H6, then enter the title. Its heading level is saved and registered in the current page's heading outline inside Insert. Tap an outline entry to centre and select it.
+- **Table:** type the initial number of rows (1–50) and columns (1–30), then edit cells, style the first row as a header, add or delete rows/columns, set individual row heights and column widths, resize the whole table, or delete it.
+
+New objects are selected automatically. Move or resize them with Lasso, then use **Edit shape**, **Edit graph**, **Edit heading**, or **Edit table** to change their settings. Double-tapping an object in Lasso mode also opens its editor. Table changes remain a draft until Save; Cancel preserves the original. All four support saving/reopening, copy/cut/paste, undo/redo, page previews, and PDF export.
 
 ## Requirements
 
@@ -108,6 +126,10 @@ The Windows emulator runners expect SDK tools at `.tools/android-sdk`. Adjust th
 ./scripts/test-ui-redesign.ps1 -Serial emulator-5554
 ./scripts/test-inline-toolbar.ps1 -Serial emulator-5554
 ./scripts/test-notebook-picker.ps1 -Serial emulator-5554
+./scripts/test-insert.ps1 -Serial emulator-5554
+./scripts/test-continuous-pages.ps1 -Serial emulator-5554
+./scripts/test-scroll-status.ps1 -Serial emulator-5554
+./scripts/test-horizontal-pan.ps1 -Serial emulator-5554
 ./scripts/test-phase10.ps1 -Serial emulator-5554
 ```
 
@@ -120,6 +142,10 @@ Recorded verification runs:
 | 23 October 2026 | Library and theme redesign; tablet, phone light/dark | 32 | [UI redesign](reports/ui-redesign/VERIFICATION.md) |
 | 23 October 2026 | Inline tool controls, page picker, selection actions, handwriting | 45 | [Editor toolbar](reports/inline-toolbar/VERIFICATION.md) |
 | 24 October 2026 | Notebook picker; saved settings, scrolling, cancellation, library workflows | 19 | [Notebook picker](reports/notebook-picker/VERIFICATION.md) |
+| 25 October 2026 | Shapes, maths graphs, headings, tables; save/export and editor regressions | 30 + 4 final dark-mode checks | [Insert tools](reports/insert/VERIFICATION.md) |
+| 25 October 2026 | Continuous vertical pages, typed table counts, writing and save regressions | 31 | [Continuous pages and table counts](reports/continuous-pages/VERIFICATION.md) |
+| 25 October 2026 | Correct save status during scrolling/pinching; gesture, toolbar, storage and handwriting regressions | 34 | [Scroll save status](reports/scroll-status/VERIFICATION.md) |
+| 25 October 2026 | Horizontal panning with zoom locked/unlocked, both page layouts, saved offsets and page transitions | 49 | [Horizontal panning](reports/horizontal-pan/VERIFICATION.md) |
 
 These runs passed build and lint with zero lint errors; existing warnings remain. Handwriting handoff, rapid dots/crossbars, and stale-storage regressions are documented in the [handwriting verification report](reports/handwriting/VERIFICATION.md). Emulator checks use synthetic input; physical stylus latency and palm rejection require device testing.
 
